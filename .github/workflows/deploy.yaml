@@ -2,8 +2,9 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [main]  # 根据你的分支名修改（main/master）
+    branches: [main]  # 如果使用 master 分支，改为 [master]
 
+# 必须添加的权限
 permissions:
   contents: read
   pages: write
@@ -20,20 +21,29 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         
+      # 添加这个步骤确保 public 目录存在
+      - name: Validate public directory
+        run: |
+          if [ ! -d "public" ]; then
+            echo "❌ Error: public directory not found!"
+            exit 1
+          fi
+          echo "✅ public directory exists"
+          
       - name: Setup Pages
-        uses: actions/configure-pages@v4  # 更新到 v4
+        uses: actions/configure-pages@v4
         
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3  # 更新到 v3
+        uses: actions/upload-pages-artifact@v3
         with:
-          path: "public/"  # 指定 public 目录为发布源
+          path: 'public/'
 
   deploy:
+    needs: build
+    runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
     steps:
-      - name: Deploy
-        uses: actions/deploy-pages@v3  # 更新到 v3
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v3
