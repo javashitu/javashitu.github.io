@@ -7,13 +7,13 @@
         <generator>Hugo -- gohugo.io</generator>
         <language>zh-cn</language>
         <copyright>javashitu</copyright>
-        <lastBuildDate>Tue, 12 Aug 2025 16:51:13 +0800</lastBuildDate><atom:link href="https://javashitu.github.io/post/index.xml" rel="self" type="application/rss+xml" /><item>
+        <lastBuildDate>Tue, 12 Aug 2025 00:00:00 +0000</lastBuildDate><atom:link href="https://javashitu.github.io/post/index.xml" rel="self" type="application/rss+xml" /><item>
         <title>虚拟内存前世今生</title>
         <link>https://javashitu.github.io/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/</link>
-        <pubDate>Tue, 12 Aug 2025 16:51:13 +0800</pubDate>
+        <pubDate>Tue, 12 Aug 2025 00:00:00 +0000</pubDate>
         
         <guid>https://javashitu.github.io/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/</guid>
-        <description>&lt;h2 id=&#34;地址空间&#34;&gt;地址空间
+        <description>&lt;img src="https://javashitu.github.io/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/cover.jpg" alt="Featured image of post 虚拟内存前世今生" /&gt;&lt;h2 id=&#34;地址空间&#34;&gt;地址空间
 &lt;/h2&gt;&lt;p&gt;操作系统的内存模型被称为分层存储体系(memory hierarchy),这个体系由若干快速且易丢失且昂贵的高速缓存cache和速度适中价格适中且同样易丢失的内存，以及速度慢，单价格低廉且不易丢失的磁盘构成。
 在比较早期的操作系统中根本没有存储体系抽象，对内存的操作都是直接操作物理内存，比如mov registor1 1000 表示将1000这个位置的内存移动到registor1中。早期一般有三种模型，操作系统位于ram的底部，操作系统位于rom的顶部，操作系统位于ram的底部但是驱动程序位于rom的顶部&lt;/p&gt;
 &lt;p&gt;&lt;img src=&#34;https://javashitu.github.io/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4.jpg&#34;
