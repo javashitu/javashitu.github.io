@@ -1,0 +1,299 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+    <channel>
+        <title>类加载器 on javashitu</title>
+        <link>https://javashitu.github.io/tags/%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/</link>
+        <description>Recent content in 类加载器 on javashitu</description>
+        <generator>Hugo -- gohugo.io</generator>
+        <language>zh-cn</language>
+        <copyright>javashitu</copyright>
+        <lastBuildDate>Thu, 04 Apr 2024 00:00:00 +0000</lastBuildDate><atom:link href="https://javashitu.github.io/tags/%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.xml" rel="self" type="application/rss+xml" /><item>
+        <title>jvm类加载器</title>
+        <link>https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/</link>
+        <pubDate>Thu, 04 Apr 2024 00:00:00 +0000</pubDate>
+        
+        <guid>https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/</guid>
+        <description>&lt;img src="https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/cover.jpg" alt="Featured image of post jvm类加载器" /&gt;&lt;h1 id=&#34;学习背景&#34;&gt;学习背景
+&lt;/h1&gt;&lt;p&gt;关于垃圾回收器的知识我们讲完了，今天开始我们讲一个JVM里也很重要的概念，类加载器。类加载器可以说是JVM的入口也不为过，而且是面试里非常高频的问点，可以和垃圾回收器并列。几乎是把把问的程度，大家要好好看好好学。&lt;/p&gt;
+&lt;h2 id=&#34;类加载步骤&#34;&gt;类加载步骤
+&lt;/h2&gt;&lt;p&gt;我们可以从类的加载步骤来考察类加载器的功能，类从进入JVM内存开始到卸载，生命周期总共经过5步&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;loading(加载) 这一步需要做的是通过类的全限定名称获取类的二进制流，将字节流所代表的静态存储结构转换为方法区的运行时数据结构，在方法区中生成这个类的class对象，作为方法区中这个类的各种数据的访问入口。也正是因为这一步没有规定读取二进制流的来源是什么，因此诞生了很多后续的技术，比如从压缩包中读取，就变成了JAR,WAR,EAR等格式，从网络中读取就发展成了Applet(运行在浏览器中的java程序，已经被淘汰)，还有JSP,和一些中间件服务器。最有生命力的则是动态代理技术。 而且，也只有这个阶段用户可以自定义一些操作来参与到类的加载过程，后面的过程全是虚拟机主导的。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;linking(链接),链接这一步包含3个步骤&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;Verfication(验证) 验证是为了保证class文件安全，不会产生危害JVM的安全，存粹的java语言是不会产生不安全的操作的，比如访问数组边界外的数据，跳转到不存在的代码。但是JVM没有要求class文件的产生途径，我们甚至可以用16进制文本编辑器来编写java文件。所以验证时很重要的，具体的验证规则和验证的时机是直到JDK1.7的JAVA虚拟机规范才具体起来的。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Preparation(准备) 这个阶段会正式为类变量分配内存并且设定初始值，需要注意的是这里只分配了类变量(static修饰的)，实例变量是没有分配的(实例变量会在初始化时一起分配在堆中)。还有就是类变量一开始会被分配为默认值，实际赋值是在编译后的&lt;clinit&gt;(这个方法是类的构造方法，收集类的信息，比静态变量值)方法中。比如&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;static int num = 123;&lt;/p&gt;&lt;/blockquote&gt;
+&lt;p&gt;那么在准备阶段会被分配为0，在初始化时才会被分配为123。但也有特殊，常量(static final)则会直接被初始化为指定的值。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Resolution(解析) 解析是将常量池中的符号引用替换为直接引用的过程。符号引用是一组描述被引用目标的符号，可以是任何形式的字面量，引用的目标不一定要存在于内存中。直接引用则是指针，相对偏移量或者句柄，直接引用一般是和虚拟机内存布局相关的。&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ul&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Initialization(初始化) 初始化是类加载过程的最后一步，到了初始化阶段，就是实际执行程序员编写的代码的步骤。初始化阶段主要是执行&lt;clinit&gt;方法。JVM会保证父类的&lt;clinit&gt;方法优先于子类执行，而且多线程环境下也会保证线程安全，当多个线程初始化一个类时，则会只有一个线程去执行&lt;clinit&gt;方法，这意味着当静态代码块中有比较耗时的操作时，在多线程初始化时有可能造成阻塞。 clinit是将所有的类变量(静态变量)和静态语句(static代码块)的代码合并收集来的。收集的顺序是按照代码顺序，需要注意的是静态代码块的只能访问定义在它之前的静态变量，定义在它之后的变量可以赋值，但是不能访问。再额外说一下，类变量必须有赋值才会被收集为clinit方法，如果只是声明了类变量,比如static int a;那么这个类其实不会生成clinit方法，常量也不会被收集到clinit方法。&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;&lt;img src=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404150930595.jpg&#34;
+	width=&#34;3100&#34;
+	height=&#34;1584&#34;
+	srcset=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404150930595_hu_1310040038964690.jpg 480w, https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404150930595_hu_ea19d59572b0a328.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404150930595&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;195&#34;
+		data-flex-basis=&#34;469px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;ol start=&#34;4&#34;&gt;
+&lt;li&gt;
+&lt;p&gt;Using(使用)&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Unloading(卸载)&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;&lt;img src=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/%E7%B1%BB%E5%8A%A0%E8%BD%BD%E6%AD%A5%E9%AA%A4.jpg&#34;
+	width=&#34;1379&#34;
+	height=&#34;620&#34;
+	srcset=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/%E7%B1%BB%E5%8A%A0%E8%BD%BD%E6%AD%A5%E9%AA%A4_hu_8ac7e0733e8cd65e.jpg 480w, https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/%E7%B1%BB%E5%8A%A0%E8%BD%BD%E6%AD%A5%E9%AA%A4_hu_a16d5030f40571f7.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;类加载步骤&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;222&#34;
+		data-flex-basis=&#34;533px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;一般的加载顺序是按照这五步进行的。需要注意的是，为了支持JAVA语言的运行时绑定，解析的 步骤有可能在初始化之后，这种操作一般被称为动态绑定或者晚绑定。而且，加载类的时机JVM也没规定，但是规定了初始化必须在加载之后，即加载，验证，准备必须在初始化之前。而且严格规定了初始化的执行时机，总共6种，且只有这六种。其他的时机JVM可以自己定义。&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;读取到new指令，访问静态final字段时&lt;/li&gt;
+&lt;li&gt;使用refect包对类进行反射时，如果类没有初始化一定要先初始化&lt;/li&gt;
+&lt;li&gt;初始化一个类时，如果父类没有初始化先初始化父类(这条规则对接口无效，接口则是允许不初始化父接口，只有使用到父接口时才初始化)&lt;/li&gt;
+&lt;li&gt;JVM启动时必须指定主类，这个主类必须最先初始化&lt;/li&gt;
+&lt;li&gt;JDK1.7下的Invoke.MethodHandler解析出的类没有经过初始化必须先初始化&lt;/li&gt;
+&lt;li&gt;JDK1.8以后得接口里使用了default方法时，如果这个接口的实现类发生了变化，那么该接口要在类被初始化之前初始化&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;举一个简单的例子&lt;/p&gt;
+&lt;p&gt;父类&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404150957280.jpg&#34;
+	width=&#34;3106&#34;
+	height=&#34;1456&#34;
+	srcset=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404150957280_hu_28ff1ff27250df4c.jpg 480w, https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404150957280_hu_89d8aa519ec8321e.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404150957280&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;213&#34;
+		data-flex-basis=&#34;511px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;子类&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151015366.jpg&#34;
+	width=&#34;2960&#34;
+	height=&#34;1304&#34;
+	srcset=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151015366_hu_5c6d9eeea0b5b389.jpg 480w, https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151015366_hu_27e80c407c035f1c.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404151015366&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;226&#34;
+		data-flex-basis=&#34;544px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;下面的代码在执行的时候只会输出&amp;quot;superclass init&amp;quot;，因为只有父类是被初始化了的，虽然是静态引用，但是父类也会初始化。静态变量在编译器编译完成阶段就会被加载到当前类的常量池中，完成和引用类的解耦，这里会初始化存粹是因为父类需要初始化。配合这个例子大家可以看一下TestClass2,TestClass3的代码，思考下为什么。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151039685.jpg&#34;
+	width=&#34;3066&#34;
+	height=&#34;1180&#34;
+	srcset=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151039685_hu_603a2060ff0873c1.jpg 480w, https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151039685_hu_768bedb0e9137987.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404151039685&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;259&#34;
+		data-flex-basis=&#34;623px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h2 id=&#34;类加载器&#34;&gt;&lt;strong&gt;类加载器&lt;/strong&gt;
+&lt;/h2&gt;&lt;p&gt;上面我们介绍了类加载的步骤，让我们概括一下类加载器的职责。在类的加载阶段，通过类的全限定名区获取类的二进制字节流，实现这个功能的代码就是类加载器。类加载器在osgi，代码热部署，代码加密等领域大放溢彩。&lt;/p&gt;
+&lt;p&gt;虽然类加载只作用在加载阶段，但是它起到的作用不仅仅在加载阶段。对于任意一个类，都需要加载这个类的类加载器和这个类本身在JVM中确立唯一性。通俗的说，两个类是否相等，取决于两个类是否是同一个类加载器加载，否则就算是同一个路径下的Class文件，在同一个虚拟机中被加载，也被视作不同的类。这里说的两个类是否相等，包括equals()的返回值，instanceOf判断，isInstance()的返回值等等。所以这个规定也影响到equals(),instanceOf等方法的返回结果。这里我给一个例子可以查看代码ClassLoaderTest，自定义类加载器，然后创建出自己，在用创建出的类实例判断是否instanceof自己，返回false。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151125588.jpg&#34;
+	width=&#34;3438&#34;
+	height=&#34;1856&#34;
+	srcset=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151125588_hu_3add46740bf03f06.jpg 480w, https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151125588_hu_a88c5478670c03ca.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404151125588&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;185&#34;
+		data-flex-basis=&#34;444px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;上面的例子虽然简单，但是也足够说明类加载器的功能了。那么什么时候需要自定义类加载器呢，常见的有3种情况&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;加密解密，java代码很容易被反编译，但是可以通过某些算法将java代码加密，然后自己实现类加载器，在类加载器中解密&lt;/li&gt;
+&lt;li&gt;从非标准源读取类，比如字节码不是在磁盘中，而是数据库甚至网络中，就可以自定义加载指定源的类加载器&lt;/li&gt;
+&lt;li&gt;动态创建类，实现类的热更新，比如OSGI（开放网关协议）&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h2 id=&#34;双亲委派模型&#34;&gt;双亲委派模型
+&lt;/h2&gt;&lt;p&gt;类加载器是JVM的一个工作模块，JVM中会存在多个类加载器，如果将这些类加载器按照某些规则排序，比如按照加载类的优先级来排序，我们就得到了一个类加载器的层次优先级，这个优先级模型就被称为双亲委派模型。 从虚拟机角度看，只有两种classLoader，启动类加载器Bootstrap ClassLoader（C++实现，有的由纯java语言实现的虚拟机则是用java实现的这个类加载器），另一种就是所有其他类加载器。类加载器工作在创建对象的加载步骤（创建对象总共3步，加载，链接，初始化）&lt;/p&gt;
+&lt;p&gt;从开发人员角度看，有3中类加载器&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/%E5%8F%8C%E4%BA%B2%E5%A7%94%E6%B4%BE%E6%A8%A1%E5%9E%8B.jpg&#34;
+	width=&#34;1404&#34;
+	height=&#34;1040&#34;
+	srcset=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/%E5%8F%8C%E4%BA%B2%E5%A7%94%E6%B4%BE%E6%A8%A1%E5%9E%8B_hu_9ec6739fdd548684.jpg 480w, https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/%E5%8F%8C%E4%BA%B2%E5%A7%94%E6%B4%BE%E6%A8%A1%E5%9E%8B_hu_e0b76a1db6b04364.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;双亲委派模型&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;135&#34;
+		data-flex-basis=&#34;324px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;启动类加载器Bootstrap ClassLoader，负责加载JAVA_HOME/lib目录下的类到虚拟机。启动类加载器无法被java程序直接引用。如果需要使用启动类加载器，在自定义classloader的getClassLoader方法里直接return null即可。当然一般我们不会这么做因为这么做就相当于没有自定义Classloader了，一般是用在根据某些条件获取不到ClassLoader时使用启动类加载器来兜底&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;&lt;img src=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404152631335.jpg&#34;
+	width=&#34;2852&#34;
+	height=&#34;1242&#34;
+	srcset=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404152631335_hu_101730b08c08a69.jpg 480w, https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404152631335_hu_d4a8e35109ec94c2.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404152631335&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;229&#34;
+		data-flex-basis=&#34;551px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;扩展类加载器Extension ClassLoader,它负责加载JAVA_HOME/lib/ext目录下或者被java.ext.dirs系统变量指定的路径中的所有类库。开发者可以直接使用这个类加载器。&lt;/li&gt;
+&lt;li&gt;应用类加载器Appliaction ClassLoader。这个类加载器是ClassLoader中的getSystemClassLoader()方法的返回值，一般也称为系统类加载器。它负责加载用户路径ClassPath上指定的所有类库。如果系统没有自定义类加载器，那么这个加载器就是默认的类加载器。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;应用程序都是由这三种类加载器之间互相配合完成的，有需要就可以自定义类加载器。&lt;/p&gt;
+&lt;p&gt;所谓双亲委派模型就是指这些类加载器之间的层次关系，除了启动类加载器，所有其他类加载器都有自己的父类加载器，这里的类加载器关系一般都由组合而不是继承的方式来复用父类加载器的代码。&lt;/p&gt;
+&lt;p&gt;双亲委派模型的工作过程是：如果一个类加载收到了类加载请求，她不会自己去加载这个类，而是把这个请求交给父类加载器去完成，这个请求会被传递一直到顶层的启动类加载器。只有当父类加载器不能完成加载请求（他的搜索范围内没有找到需要的类）时，子类加载器才回去加载。当然这是一个理论描述，我们可以从代码角度去观察，实际实现就是在ClassLoader的laodClass方法内，可以看到，首先会检查父类加载器parent存不存在，存在就使用父类加载器加载。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/2023-06-26-11-05-04-image-2213535.jpg&#34;
+	width=&#34;3390&#34;
+	height=&#34;1382&#34;
+	srcset=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/2023-06-26-11-05-04-image-2213535_hu_4c635fae1dd8267c.jpg 480w, https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/2023-06-26-11-05-04-image-2213535_hu_5d302139e00d643c.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;img&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;245&#34;
+		data-flex-basis=&#34;588px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;使用双亲委派模型的好处是所有类都具备一种优先的层次关系。比如Object，无论哪个类加载加载这个类，最终都是委派给处于模型最顶端的启动类加载器加载，也就是同一个类。如果不是同一个类，java体系中最基本的行为就得不到保证。&lt;/p&gt;
+&lt;p&gt;自定义类加载器&lt;/p&gt;
+&lt;p&gt;自定义类加载器，其实就是继承ClassLoader并且重写findClass方法。这里我自定义的类加载器功能是从指定目录读取class文件的字节流。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404152936528.jpg&#34;
+	width=&#34;3296&#34;
+	height=&#34;1750&#34;
+	srcset=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404152936528_hu_e288878d7788b7c.jpg 480w, https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404152936528_hu_ea599b65d9a6520f.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404152936528&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;188&#34;
+		data-flex-basis=&#34;452px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;通过调用自定义类加载器并且通过反射创建出指定的对象，并且执行方法&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404153017758.jpg&#34;
+	width=&#34;3528&#34;
+	height=&#34;1662&#34;
+	srcset=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404153017758_hu_b6de77b6f409728b.jpg 480w, https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404153017758_hu_b8c194713493bf45.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404153017758&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;212&#34;
+		data-flex-basis=&#34;509px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h3 id=&#34;打破双亲委派规则&#34;&gt;打破双亲委派规则
+&lt;/h3&gt;&lt;p&gt;所谓打破双亲委派规则，就是改变我们之前说的，总是由父类加载器优先去加载类实例。&lt;/p&gt;
+&lt;p&gt;类加载器一开始的自定义方法是覆盖loadClass方法，现在则是重写findclass方法，其实findClass方法也是在laodClass方法里调用的的。在loadClass方法内，如果父类加载获取不到class,就会调用findClass方法。这就是双亲委派模型的工作方式。如果需要打破这个模型，其实就是重写loadClass方法。这里我不举例子，大家知道怎么做即可。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20230626114132707-2213535.jpg&#34;
+	width=&#34;3398&#34;
+	height=&#34;1614&#34;
+	srcset=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20230626114132707-2213535_hu_d79a2bd2ed1b3ced.jpg 480w, https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20230626114132707-2213535_hu_8d44d57c6efa5676.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20230626114132707&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;210&#34;
+		data-flex-basis=&#34;505px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;双亲委派模型历史上出现过3次被打破的情况，分别是&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;JDK1.2之前自己打破双亲委派模型 原因是类加载器是从JDK1.0开始就存在的，但是双亲委派模型是JDK1.2引入的，在双亲委派模型出现之前自定义的类加载器都是重写的laodClass方法，为了兼容这种情况，JDK1.2添加了一个protected的laodClass方法，这样类加载器中就有两个laodClass方法，public的loadClass方法唯一的作用就是调用protected的laodClass。但是原先的1.2之前出现的类加载器已经打破了双亲委派模型。所以1.2之后都是通过重写findClass来完成自定义类加载器的工作。&lt;/li&gt;
+&lt;li&gt;双亲委派模型的第二次破坏是由双亲委派模型的缺陷决定的。我们知道用户重写的是findClass方法，而比较基础的类则是直接委托给顶层的类加载器加载。那么假设基础的类想要访问用户的代码会怎么样，比如JNDI(JNDI是一个资源查找管理服务，它会查找classPath下实现JNDI提供者的代码)这就要求基础类加载器能够识别出用户自定义的代码。为了解决这个问题，java的团队引入了不太优雅的线程上下文类加载器，这个类加载器通过线程的Thread.setContextClassLoader()，这个类加载器会在线程创建时设置，如果不设置就从父线程继承，如果父线程没有，且全局都没有设置，那么就是用应用类加载器。有了这个加载器，父类加载器就能够在特定的条件下去使用子类加载器加载所需要的SPI代码,而且目前JAVA所有涉及SPI的加载动作都是这样完成的，如jdbc,jce，jaxb,jbi等。但是这明显打破了双亲委派模型的一般性规则(即总是先由父类去加载，父类无法完成再使用子类去完成)&lt;/li&gt;
+&lt;li&gt;双亲委派模型的第三次破坏则是为了追求动态性(代码热部署，热更新)做出的妥协，在某些场景下关机一次就会产生事故，为了应对这些场景就需要热部署的功能。热部署的解决方案是模块化，模块化在业界的事实标准是OSGI(也被称为JSR-291提案，SUN也有自己的提案但是失败了，提案是有业界大牛提供给jcp,然后由委员会决策通过的)，OSGI技术的关键每个模块独有自己的类加载器，且各个模块之间类加载器互相关联，这就不是原先的双亲委派模型的层级结构，而是网状结构。OSGI的搜索方式很复杂，不做介绍，我们知道有这么个事情即可。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;打破双亲委派规则是可以的，只要有足够的理由，合理的创新也是值得推荐的。&lt;/p&gt;
+&lt;h2 id=&#34;类加载实例&#34;&gt;类加载实例
+&lt;/h2&gt;&lt;p&gt;讲完了类加载器的功能和工作方式，我们再通过几个案例来讲解类加载的时机以及要求。常见的tomcat,jetty,weblogic都实现了自己的类加载器。以tomcat为例，因为TOMCAT使用的是正统且标准的类加载器结构，一个web服务器要解决很多问题，比如&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;部署在一个web服务器下的程序的类库需要互相独立，不能干扰。&lt;/li&gt;
+&lt;li&gt;多个程序之间如果有相同的类库，必须能复用，因为如果简单地只是每个服务单独加载自己的类库是很浪费资源的。比如两个服务里都使用到了guava包，而且版本一样，那么两个服务最好都加载同一个包。&lt;/li&gt;
+&lt;li&gt;服务器本身不能受到程序的类库的影响&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;为了实现这些需求，如果是简单的使用应用程序类加载器只读取classpath目录下的类库，很明显会因为类库的冲突发生错误。所以tomcat得做法是划分出多个目录，common,server,shared,加上web程序jar内部自身的web-inf目录，对这些目录分别使用不同的类加载器达到不同的效果，common目录下的类库可以被tomcat和web应用程序公用，server目录下的则可以被tomcat使用，shared目录下类库的可以所有web服务器使用。jar包自身的web-inf目录下的类库则只能被web程序使用。为此tomcat定义了多个类加载器。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/tomcat%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8.jpg&#34;
+	width=&#34;860&#34;
+	height=&#34;1572&#34;
+	srcset=&#34;https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/tomcat%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8_hu_7b97070ab76f04fa.jpg 480w, https://javashitu.github.io/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/tomcat%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8_hu_90c206c6ac12b36f.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;tomcat类加载器&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;54&#34;
+		data-flex-basis=&#34;131px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;额外说一下JSP，虽然已经淘汰了。JSP是每个JSP文件一个JSP类加载器，很操蛋是吧，这也决定了它性能很垃圾。再考虑一种场景，使用sparing开发的程序，使用tomcat部署，spring类库被放在common路径下，但是如果一个tomcat部署了10个spring程序，那么spring是怎么分别获取到这些程序的启动入口的呢？其实就是通过SPI机制配合自定义类加载器完成的，这也是spring的starter的核心原理。&lt;/p&gt;
+&lt;h1 id=&#34;end&#34;&gt;END
+&lt;/h1&gt;&lt;p&gt;到这里类加载器的内容就讲完了，类加载器是面试里非常高频的考点，大家一定要好好学。项目里用到的代码可以在公众号上回复8121获取。&lt;/p&gt;
+</description>
+        </item>
+        
+    </channel>
+</rss>
