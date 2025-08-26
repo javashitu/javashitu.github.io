@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="zh-cn" dir="ltr">
+    <head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'><meta name='description' content="学习背景 今天我们来学习一下KAFKA的消息如何发送的。kafka消息的发送可以分为从客户端写入和服务端写入两部分，今天先将第一部分，客户端怎么写入的。\nKAFKA基本概念 在正式开始介绍kafka之前，先了解一下kafka内的基本概念，这些基本概念是接下来讲解发送流程的基础。\nbroker kafka实例：每台机器上可以部署一个或者多个kafka实例，一般一台机器一个，我们可以认为一个kafka实例代表一台实际的对外提供服务的kafka物理机。kafka集群内实例用编号区分。例如broker-0，broker-1\ntopic 主题：每条消息的归属依据。\npartition 分区： 每个主题有多个partitioon，partition可以认为是对主题下消息的二次分类，不同分区之间的数据是不重复的。分区在物理存储上的表现形式就是一个个的文件夹。\nreplication 副本: 副本是分区的实际实现，每个分区都有多个副本，但是只有一个服务对外提供服务，我们称为leader副本，其他副本称为flower。副本的作用是用来做备份，做leader挂掉时follower之间选举出新的leader，follower和leader绝不在同一个broker上。副本的概念理解起来很复杂，这里大家可能听得云里雾里的，没关系副本机制可以说是kafka的核心。先放着，一会讲完flower之间选举机制就明白了。\nproducer 生产者: 向topic写入消息的程序。\nmessage: 生产者实际发送的消息主体。\nconsumer 消费者：向topic订阅并消费消息的程序。\nconsumer group: 消费者组，划分consumer的依据，同一个组内的消费者能够消费同一个topic中的数据。\n消息发送流程 客户端发送 让我们从一个例子来开始，一个简单的发送消息的例子。这里我定义了一个producer，并且自己实现了拦截器，序列化器，分区器。可能大家看到之类很陌生，因为一般不需要自定义这些组件，统统用默认的就可以了。这里我自定义这些组件仅仅为了做讲解。\n从kafka的组件设计来讲，消息使用producer.send发送(当然还有异步发送，但是这不是重点)后，会顺序的经过拦截器，序列化器，分区器。三个组件的作用分别讲解一下。\n消息最先抵达的是拦截器，拦截器的存在是为了在消息被发送之前做一些统一的修改或者统计，比如打印日志，统计每个topci发送的消息等等。从拦截器最后的返回结果我们可以看出来，这一步其实可以修改很多东西，甚至是消息发送的topic，partition都是可以更改的。当然一般不会有人这么干，因为这相当于篡改了原始消息内容。\n拦截器之后经过的是序列化器，序列化器的目的是为了将消息序列化为字节数组，这里我自定义了一个和简单的序列化方式，直接序列化为JSON字符串再转换为字符数组。当然如果我们直接写入JSON格式字符串，那么使用默认的字符序列化器也是可以的。而且大部分情况下，我们应该尽量直接发送字符串，这样不至于每次变更消息格式都需要再改一遍序列化器的代码。\n消息被序列化之后就到了分区器，分区器的作用只有一个，选择消息最重要发往那个分区。分区器一般也是不需要手动定义的，使用kafka默认的分区器就可以。当然，我们还可以在发送消息的位置，指定一个消息的分区，这样就会被发往我们想要发送的分区。或者我们指定一个消息的key，kafka则会根据key计算出一个hash值然后使用这个分区。这个特性非常有用，我们可以利用这个特点将很多相同&quot;分类&quot;的消息发送到同一个分区，比如消息里有个字段叫做orderId，那么我们根据orderId作为分区的key，就可以保证同一个订单的消息被发往同一个分区，这样如果订单的生命周期发生变化，那么生命周期变化的消息会被顺序的写入到分区内(这种场景高并发多线程写入其实还是会有问题，需要考虑状态机的流转和回退问题，但是可以通过拉长生命周期来避免)。如果不指定分区，也不指定消息key，kafka则会在各个分区之间轮训的写入消息。\n到这里大家是不是以为就完了，这就算消息发送完毕了？当然不是，我们好药探究kafka在消息发送过程里到底做了那些事情。先看一幅图。\n实际上，在创建的kafka producer内，有2个线程，一个是主线程，也就是我们执行send方法的线程，一个是sender线程。我们来看看这两个线程分别做了什么。\n消息在经过分区器确定要发往那个分区之后，会被写入到record accumulator(消息累加器)，并且会将若干条消息合并为一个record batch，每个record batch的大小由参数batch.size指定，默认16K。将多条消息合并是为了减少发送消息的次数，这样原本需要多次发送的消息只需要一次发送即可，当然这里还没实际执行发送的。每个record batch其实是放在一个双向队列Deque里的，消息在被发到消息收集器record accumulator后会找到自己所属的分区对应的deque，并判断需要将消息加入到队尾的record batch还是新建一个record batch。这里有个问题，如果消息超过了record batch的大小会怎么样？其实会按照消息大小来新建一个record batch，不过这个新建的record batch使用完毕就被回收了。而一般的record batch则会被复用。\n">
+<title>kafka是如何写入消息的</title>
+
+<link rel='canonical' href='http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/'>
+
+<link rel="stylesheet" href="/scss/style.min.946cca6c6259ef94ac55abfae7c7bf3291ea3ed5eea17ef77500b257217c6710.css"><meta property='og:title' content="kafka是如何写入消息的">
+<meta property='og:description' content="学习背景 今天我们来学习一下KAFKA的消息如何发送的。kafka消息的发送可以分为从客户端写入和服务端写入两部分，今天先将第一部分，客户端怎么写入的。\nKAFKA基本概念 在正式开始介绍kafka之前，先了解一下kafka内的基本概念，这些基本概念是接下来讲解发送流程的基础。\nbroker kafka实例：每台机器上可以部署一个或者多个kafka实例，一般一台机器一个，我们可以认为一个kafka实例代表一台实际的对外提供服务的kafka物理机。kafka集群内实例用编号区分。例如broker-0，broker-1\ntopic 主题：每条消息的归属依据。\npartition 分区： 每个主题有多个partitioon，partition可以认为是对主题下消息的二次分类，不同分区之间的数据是不重复的。分区在物理存储上的表现形式就是一个个的文件夹。\nreplication 副本: 副本是分区的实际实现，每个分区都有多个副本，但是只有一个服务对外提供服务，我们称为leader副本，其他副本称为flower。副本的作用是用来做备份，做leader挂掉时follower之间选举出新的leader，follower和leader绝不在同一个broker上。副本的概念理解起来很复杂，这里大家可能听得云里雾里的，没关系副本机制可以说是kafka的核心。先放着，一会讲完flower之间选举机制就明白了。\nproducer 生产者: 向topic写入消息的程序。\nmessage: 生产者实际发送的消息主体。\nconsumer 消费者：向topic订阅并消费消息的程序。\nconsumer group: 消费者组，划分consumer的依据，同一个组内的消费者能够消费同一个topic中的数据。\n消息发送流程 客户端发送 让我们从一个例子来开始，一个简单的发送消息的例子。这里我定义了一个producer，并且自己实现了拦截器，序列化器，分区器。可能大家看到之类很陌生，因为一般不需要自定义这些组件，统统用默认的就可以了。这里我自定义这些组件仅仅为了做讲解。\n从kafka的组件设计来讲，消息使用producer.send发送(当然还有异步发送，但是这不是重点)后，会顺序的经过拦截器，序列化器，分区器。三个组件的作用分别讲解一下。\n消息最先抵达的是拦截器，拦截器的存在是为了在消息被发送之前做一些统一的修改或者统计，比如打印日志，统计每个topci发送的消息等等。从拦截器最后的返回结果我们可以看出来，这一步其实可以修改很多东西，甚至是消息发送的topic，partition都是可以更改的。当然一般不会有人这么干，因为这相当于篡改了原始消息内容。\n拦截器之后经过的是序列化器，序列化器的目的是为了将消息序列化为字节数组，这里我自定义了一个和简单的序列化方式，直接序列化为JSON字符串再转换为字符数组。当然如果我们直接写入JSON格式字符串，那么使用默认的字符序列化器也是可以的。而且大部分情况下，我们应该尽量直接发送字符串，这样不至于每次变更消息格式都需要再改一遍序列化器的代码。\n消息被序列化之后就到了分区器，分区器的作用只有一个，选择消息最重要发往那个分区。分区器一般也是不需要手动定义的，使用kafka默认的分区器就可以。当然，我们还可以在发送消息的位置，指定一个消息的分区，这样就会被发往我们想要发送的分区。或者我们指定一个消息的key，kafka则会根据key计算出一个hash值然后使用这个分区。这个特性非常有用，我们可以利用这个特点将很多相同&quot;分类&quot;的消息发送到同一个分区，比如消息里有个字段叫做orderId，那么我们根据orderId作为分区的key，就可以保证同一个订单的消息被发往同一个分区，这样如果订单的生命周期发生变化，那么生命周期变化的消息会被顺序的写入到分区内(这种场景高并发多线程写入其实还是会有问题，需要考虑状态机的流转和回退问题，但是可以通过拉长生命周期来避免)。如果不指定分区，也不指定消息key，kafka则会在各个分区之间轮训的写入消息。\n到这里大家是不是以为就完了，这就算消息发送完毕了？当然不是，我们好药探究kafka在消息发送过程里到底做了那些事情。先看一幅图。\n实际上，在创建的kafka producer内，有2个线程，一个是主线程，也就是我们执行send方法的线程，一个是sender线程。我们来看看这两个线程分别做了什么。\n消息在经过分区器确定要发往那个分区之后，会被写入到record accumulator(消息累加器)，并且会将若干条消息合并为一个record batch，每个record batch的大小由参数batch.size指定，默认16K。将多条消息合并是为了减少发送消息的次数，这样原本需要多次发送的消息只需要一次发送即可，当然这里还没实际执行发送的。每个record batch其实是放在一个双向队列Deque里的，消息在被发到消息收集器record accumulator后会找到自己所属的分区对应的deque，并判断需要将消息加入到队尾的record batch还是新建一个record batch。这里有个问题，如果消息超过了record batch的大小会怎么样？其实会按照消息大小来新建一个record batch，不过这个新建的record batch使用完毕就被回收了。而一般的record batch则会被复用。\n">
+<meta property='og:url' content='http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/'>
+<meta property='og:site_name' content='javashitu'>
+<meta property='og:type' content='article'><meta property='article:section' content='Post' /><meta property='article:tag' content='kafka' /><meta property='article:tag' content='生产者' /><meta property='article:published_time' content='2024-09-01T00:00:00&#43;00:00'/><meta property='article:modified_time' content='2024-09-01T00:00:00&#43;00:00'/><meta property='og:image' content='http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/cover.jpg' />
+<meta name="twitter:title" content="kafka是如何写入消息的">
+<meta name="twitter:description" content="学习背景 今天我们来学习一下KAFKA的消息如何发送的。kafka消息的发送可以分为从客户端写入和服务端写入两部分，今天先将第一部分，客户端怎么写入的。\nKAFKA基本概念 在正式开始介绍kafka之前，先了解一下kafka内的基本概念，这些基本概念是接下来讲解发送流程的基础。\nbroker kafka实例：每台机器上可以部署一个或者多个kafka实例，一般一台机器一个，我们可以认为一个kafka实例代表一台实际的对外提供服务的kafka物理机。kafka集群内实例用编号区分。例如broker-0，broker-1\ntopic 主题：每条消息的归属依据。\npartition 分区： 每个主题有多个partitioon，partition可以认为是对主题下消息的二次分类，不同分区之间的数据是不重复的。分区在物理存储上的表现形式就是一个个的文件夹。\nreplication 副本: 副本是分区的实际实现，每个分区都有多个副本，但是只有一个服务对外提供服务，我们称为leader副本，其他副本称为flower。副本的作用是用来做备份，做leader挂掉时follower之间选举出新的leader，follower和leader绝不在同一个broker上。副本的概念理解起来很复杂，这里大家可能听得云里雾里的，没关系副本机制可以说是kafka的核心。先放着，一会讲完flower之间选举机制就明白了。\nproducer 生产者: 向topic写入消息的程序。\nmessage: 生产者实际发送的消息主体。\nconsumer 消费者：向topic订阅并消费消息的程序。\nconsumer group: 消费者组，划分consumer的依据，同一个组内的消费者能够消费同一个topic中的数据。\n消息发送流程 客户端发送 让我们从一个例子来开始，一个简单的发送消息的例子。这里我定义了一个producer，并且自己实现了拦截器，序列化器，分区器。可能大家看到之类很陌生，因为一般不需要自定义这些组件，统统用默认的就可以了。这里我自定义这些组件仅仅为了做讲解。\n从kafka的组件设计来讲，消息使用producer.send发送(当然还有异步发送，但是这不是重点)后，会顺序的经过拦截器，序列化器，分区器。三个组件的作用分别讲解一下。\n消息最先抵达的是拦截器，拦截器的存在是为了在消息被发送之前做一些统一的修改或者统计，比如打印日志，统计每个topci发送的消息等等。从拦截器最后的返回结果我们可以看出来，这一步其实可以修改很多东西，甚至是消息发送的topic，partition都是可以更改的。当然一般不会有人这么干，因为这相当于篡改了原始消息内容。\n拦截器之后经过的是序列化器，序列化器的目的是为了将消息序列化为字节数组，这里我自定义了一个和简单的序列化方式，直接序列化为JSON字符串再转换为字符数组。当然如果我们直接写入JSON格式字符串，那么使用默认的字符序列化器也是可以的。而且大部分情况下，我们应该尽量直接发送字符串，这样不至于每次变更消息格式都需要再改一遍序列化器的代码。\n消息被序列化之后就到了分区器，分区器的作用只有一个，选择消息最重要发往那个分区。分区器一般也是不需要手动定义的，使用kafka默认的分区器就可以。当然，我们还可以在发送消息的位置，指定一个消息的分区，这样就会被发往我们想要发送的分区。或者我们指定一个消息的key，kafka则会根据key计算出一个hash值然后使用这个分区。这个特性非常有用，我们可以利用这个特点将很多相同&quot;分类&quot;的消息发送到同一个分区，比如消息里有个字段叫做orderId，那么我们根据orderId作为分区的key，就可以保证同一个订单的消息被发往同一个分区，这样如果订单的生命周期发生变化，那么生命周期变化的消息会被顺序的写入到分区内(这种场景高并发多线程写入其实还是会有问题，需要考虑状态机的流转和回退问题，但是可以通过拉长生命周期来避免)。如果不指定分区，也不指定消息key，kafka则会在各个分区之间轮训的写入消息。\n到这里大家是不是以为就完了，这就算消息发送完毕了？当然不是，我们好药探究kafka在消息发送过程里到底做了那些事情。先看一幅图。\n实际上，在创建的kafka producer内，有2个线程，一个是主线程，也就是我们执行send方法的线程，一个是sender线程。我们来看看这两个线程分别做了什么。\n消息在经过分区器确定要发往那个分区之后，会被写入到record accumulator(消息累加器)，并且会将若干条消息合并为一个record batch，每个record batch的大小由参数batch.size指定，默认16K。将多条消息合并是为了减少发送消息的次数，这样原本需要多次发送的消息只需要一次发送即可，当然这里还没实际执行发送的。每个record batch其实是放在一个双向队列Deque里的，消息在被发到消息收集器record accumulator后会找到自己所属的分区对应的deque，并判断需要将消息加入到队尾的record batch还是新建一个record batch。这里有个问题，如果消息超过了record batch的大小会怎么样？其实会按照消息大小来新建一个record batch，不过这个新建的record batch使用完毕就被回收了。而一般的record batch则会被复用。\n"><meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content='http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/cover.jpg' />
+    </head>
+    <body class="
+    article-page
+    ">
+    <script>
+        (function() {
+            const colorSchemeKey = 'StackColorScheme';
+            if(!localStorage.getItem(colorSchemeKey)){
+                localStorage.setItem(colorSchemeKey, "auto");
+            }
+        })();
+    </script><script>
+    (function() {
+        const colorSchemeKey = 'StackColorScheme';
+        const colorSchemeItem = localStorage.getItem(colorSchemeKey);
+        const supportDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches === true;
+
+        if (colorSchemeItem == 'dark' || colorSchemeItem === 'auto' && supportDarkMode) {
+            
+
+            document.documentElement.dataset.scheme = 'dark';
+        } else {
+            document.documentElement.dataset.scheme = 'light';
+        }
+    })();
+</script>
+<div class="container main-container flex on-phone--column extended"><aside class="sidebar left-sidebar sticky ">
+    <button class="hamburger hamburger--spin" type="button" id="toggle-menu" aria-label="切换菜单">
+        <span class="hamburger-box">
+            <span class="hamburger-inner"></span>
+        </span>
+    </button>
+
+    <header>
+        
+            
+            <figure class="site-avatar">
+                <a href="/">
+                
+                    
+                    
+                    
+                        
+                        <img src="/img/javashitu_hu_4b8114d532ed8b7b.jpg" width="300"
+                            height="300" class="site-logo" loading="lazy" alt="Avatar">
+                    
+                
+                </a>
+                
+            </figure>
+            
+        
+        
+        <div class="site-meta">
+            <h1 class="site-name"><a href="/">javashitu</a></h1>
+            <h2 class="site-description">联系我请➕微信javashitu</h2>
+        </div>
+    </header><ol class="menu-social">
+            
+                <li>
+                    <a 
+                        href='https://github.com/javashitu'
+                        target="_blank"
+                        title="GitHub"
+                        rel="me"
+                    >
+                        
+                        
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-brand-github" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5" />
+</svg>
+
+
+
+                        
+                    </a>
+                </li>
+            
+        </ol><ol class="menu" id="main-menu">
+        
+        
+        
+        <li >
+            <a href='/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-home" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <polyline points="5 12 3 12 12 3 21 12 19 12" />
+  <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7" />
+  <path d="M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6" />
+</svg>
+
+
+
+                
+                <span>主页</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/%E5%85%B3%E4%BA%8E/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-user" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="7" r="4" />
+  <path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />
+</svg>
+
+
+
+                
+                <span>关于</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/archives/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-archive" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <rect x="3" y="4" width="18" height="4" rx="2" />
+  <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-10" />
+  <line x1="10" y1="12" x2="14" y2="12" />
+</svg>
+
+
+
+                
+                <span>Archives</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/search/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-search" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="10" cy="10" r="7" />
+  <line x1="21" y1="21" x2="15" y2="15" />
+</svg>
+
+
+
+                
+                <span>Search</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/links/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-link" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <path d="M10 14a3.5 3.5 0 0 0 5 0l4 -4a3.5 3.5 0 0 0 -5 -5l-.5 .5" />
+  <path d="M14 10a3.5 3.5 0 0 0 -5 0l-4 4a3.5 3.5 0 0 0 5 5l.5 -.5" />
+</svg>
+
+
+
+                
+                <span>Links</span>
+            </a>
+        </li>
+        
+        <li class="menu-bottom-section">
+            <ol class="menu">
+                    
+                        <li id="i18n-switch">  
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-language" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M4 5h7" />
+  <path d="M9 3v2c0 4.418 -2.239 8 -5 8" />
+  <path d="M5 9c-.003 2.144 2.952 3.908 6.7 4" />
+  <path d="M12 20l4 -9l4 9" />
+  <path d="M19.1 18h-6.2" />
+</svg>
+
+
+
+                            <select name="language" title="language" onchange="window.location.href = this.selectedOptions[0].value">
+                                
+                                    <option value="http://localhost:1313/en/" >English</option>
+                                
+                                    <option value="http://localhost:1313/" selected>中文</option>
+                                
+                            </select>
+                        </li>
+                    
+                
+
+                
+                    <li id="dark-mode-toggle">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-left" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="8" cy="12" r="2" />
+  <rect x="2" y="6" width="20" height="12" rx="6" />
+</svg>
+
+
+
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-right" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="16" cy="12" r="2" />
+  <rect x="2" y="6" width="20" height="12" rx="6" />
+</svg>
+
+
+
+                        <span>暗色模式</span>
+                    </li>
+                
+            </ol>
+        </li>
+    </ol>
+</aside>
+
+    <aside class="sidebar right-sidebar sticky">
+        
+            
+                
+    <section class="widget archives">
+        <div class="widget-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-hash" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <line x1="5" y1="9" x2="19" y2="9" />
+  <line x1="5" y1="15" x2="19" y2="15" />
+  <line x1="11" y1="4" x2="7" y2="20" />
+  <line x1="17" y1="4" x2="13" y2="20" />
+</svg>
+
+
+
+        </div>
+        <h2 class="widget-title section-title">目录</h2>
+        
+        <div class="widget--toc">
+            <nav id="TableOfContents">
+  <ol>
+    <li><a href="#客户端发送">客户端发送</a></li>
+  </ol>
+</nav>
+        </div>
+    </section>
+
+            
+        
+    </aside>
+
+
+            <main class="main full-width">
+    <article class="has-image main-article">
+    <header class="article-header">
+        <div class="article-image">
+            <a href="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/">
+                <img src="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/cover_hu_318e444ffc7a50e7.jpg"
+                        srcset="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/cover_hu_318e444ffc7a50e7.jpg 800w, /p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/cover_hu_d403912877c57461.jpg 1600w"
+                        width="800" 
+                        height="450" 
+                        loading="lazy"
+                        alt="Featured image of post kafka是如何写入消息的" />
+                
+            </a>
+        </div>
+    
+
+    <div class="article-details">
+    
+    <header class="article-category">
+        
+            <a href="/categories/kafka/" >
+                Kafka
+            </a>
+        
+    </header>
+    
+
+    <div class="article-title-wrapper">
+        <h2 class="article-title">
+            <a href="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/">kafka是如何写入消息的</a>
+        </h2>
+    
+        
+    </div>
+
+    
+    
+    
+    
+    <footer class="article-time">
+        
+            <div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-calendar-time" width="56" height="56" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <path d="M11.795 21h-6.795a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v4" />
+  <circle cx="18" cy="18" r="4" />
+  <path d="M15 3v4" />
+  <path d="M7 3v4" />
+  <path d="M3 11h16" />
+  <path d="M18 16.496v1.504l1 1" />
+</svg>
+                <time class="article-time--published">2024-9-1</time>
+            </div>
+        
+
+        
+            <div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-clock" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <polyline points="12 7 12 12 15 15" />
+</svg>
+
+
+
+                
+                <time class="article-time--reading">
+                    
+                    14min
+                </time>
+            </div>
+        
+    </footer>
+    
+
+    
+</div>
+
+</header>
+
+    <section class="article-content">
+    
+    
+    <h1 id="学习背景">学习背景
+</h1><p>今天我们来学习一下KAFKA的消息如何发送的。kafka消息的发送可以分为从客户端写入和服务端写入两部分，今天先将第一部分，客户端怎么写入的。</p>
+<h1 id="kafka基本概念">KAFKA基本概念
+</h1><p>在正式开始介绍kafka之前，先了解一下kafka内的基本概念，这些基本概念是接下来讲解发送流程的基础。</p>
+<ul>
+<li>
+<p>broker kafka实例：每台机器上可以部署一个或者多个kafka实例，一般一台机器一个，我们可以认为一个kafka实例代表一台实际的对外提供服务的kafka物理机。kafka集群内实例用编号区分。例如broker-0，broker-1</p>
+</li>
+<li>
+<p>topic 主题：每条消息的归属依据。</p>
+</li>
+<li>
+<p>partition 分区： 每个主题有多个partitioon，partition可以认为是对主题下消息的二次分类，不同分区之间的数据是不重复的。分区在物理存储上的表现形式就是一个个的文件夹。</p>
+</li>
+<li>
+<p>replication 副本: 副本是分区的实际实现，每个分区都有多个副本，但是只有一个服务对外提供服务，我们称为leader副本，其他副本称为flower。副本的作用是用来做备份，做leader挂掉时follower之间选举出新的leader，follower和leader绝不在同一个broker上。副本的概念理解起来很复杂，这里大家可能听得云里雾里的，没关系副本机制可以说是kafka的核心。先放着，一会讲完flower之间选举机制就明白了。</p>
+</li>
+<li>
+<p>producer 生产者:  向topic写入消息的程序。</p>
+</li>
+<li>
+<p>message:  生产者实际发送的消息主体。</p>
+</li>
+<li>
+<p>consumer 消费者：向topic订阅并消费消息的程序。</p>
+</li>
+<li>
+<p>consumer group: 消费者组，划分consumer的依据，同一个组内的消费者能够消费同一个topic中的数据。</p>
+</li>
+</ul>
+<h1 id="消息发送流程">消息发送流程
+</h1><h2 id="客户端发送">客户端发送
+</h2><p>让我们从一个例子来开始，一个简单的发送消息的例子。这里我定义了一个producer，并且自己实现了拦截器，序列化器，分区器。可能大家看到之类很陌生，因为一般不需要自定义这些组件，统统用默认的就可以了。这里我自定义这些组件仅仅为了做讲解。</p>
+<p><img src="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901133629506.jpg"
+	width="2560"
+	height="1389"
+	srcset="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901133629506_hu_cc04b2dea975025.jpg 480w, /p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901133629506_hu_20f9ed4e395982ee.jpg 1024w"
+	loading="lazy"
+	
+		alt="image-20240901133629506"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="184"
+		data-flex-basis="442px"
+	
+></p>
+<p>从kafka的组件设计来讲，消息使用producer.send发送(当然还有异步发送，但是这不是重点)后，会顺序的经过拦截器，序列化器，分区器。三个组件的作用分别讲解一下。</p>
+<p>消息最先抵达的是拦截器，拦截器的存在是为了在消息被发送之前做一些统一的修改或者统计，比如打印日志，统计每个topci发送的消息等等。从拦截器最后的返回结果我们可以看出来，这一步其实可以修改很多东西，甚至是消息发送的topic，partition都是可以更改的。当然一般不会有人这么干，因为这相当于篡改了原始消息内容。</p>
+<p><img src="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901134602620.jpg"
+	width="2560"
+	height="1389"
+	srcset="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901134602620_hu_1605381b027b5c41.jpg 480w, /p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901134602620_hu_933b8364a6d7b60d.jpg 1024w"
+	loading="lazy"
+	
+		alt="image-20240901134602620"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="184"
+		data-flex-basis="442px"
+	
+></p>
+<p>拦截器之后经过的是序列化器，序列化器的目的是为了将消息序列化为字节数组，这里我自定义了一个和简单的序列化方式，直接序列化为JSON字符串再转换为字符数组。当然如果我们直接写入JSON格式字符串，那么使用默认的字符序列化器也是可以的。而且大部分情况下，我们应该尽量直接发送字符串，这样不至于每次变更消息格式都需要再改一遍序列化器的代码。</p>
+<p><img src="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901134732441.jpg"
+	width="2560"
+	height="1389"
+	srcset="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901134732441_hu_de93b52962b81b11.jpg 480w, /p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901134732441_hu_90b5b10b087b2050.jpg 1024w"
+	loading="lazy"
+	
+		alt="image-20240901134732441"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="184"
+		data-flex-basis="442px"
+	
+></p>
+<p>消息被序列化之后就到了分区器，分区器的作用只有一个，选择消息最重要发往那个分区。分区器一般也是不需要手动定义的，使用kafka默认的分区器就可以。当然，我们还可以在发送消息的位置，指定一个消息的分区，这样就会被发往我们想要发送的分区。或者我们指定一个消息的key，kafka则会根据key计算出一个hash值然后使用这个分区。这个特性非常有用，我们可以利用这个特点将很多相同&quot;分类&quot;的消息发送到同一个分区，比如消息里有个字段叫做orderId，那么我们根据orderId作为分区的key，就可以保证同一个订单的消息被发往同一个分区，这样如果订单的生命周期发生变化，那么生命周期变化的消息会被顺序的写入到分区内(这种场景高并发多线程写入其实还是会有问题，需要考虑状态机的流转和回退问题，但是可以通过拉长生命周期来避免)。如果不指定分区，也不指定消息key，kafka则会在各个分区之间轮训的写入消息。</p>
+<p><img src="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901135047759.jpg"
+	width="2560"
+	height="1389"
+	srcset="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901135047759_hu_f852f0f5894acfb6.jpg 480w, /p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901135047759_hu_a39c6a10a2e65b1a.jpg 1024w"
+	loading="lazy"
+	
+		alt="image-20240901135047759"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="184"
+		data-flex-basis="442px"
+	
+></p>
+<p>到这里大家是不是以为就完了，这就算消息发送完毕了？当然不是，我们好药探究kafka在消息发送过程里到底做了那些事情。先看一幅图。</p>
+<p><img src="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/kafka%E5%8F%91%E9%80%81%E6%B6%88%E6%81%AF%E6%9E%B6%E6%9E%84.jpg"
+	width="5281"
+	height="1255"
+	srcset="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/kafka%E5%8F%91%E9%80%81%E6%B6%88%E6%81%AF%E6%9E%B6%E6%9E%84_hu_b003f164c2698375.jpg 480w, /p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/kafka%E5%8F%91%E9%80%81%E6%B6%88%E6%81%AF%E6%9E%B6%E6%9E%84_hu_125404bc493b3f7b.jpg 1024w"
+	loading="lazy"
+	
+		alt="kafka发送消息架构"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="420"
+		data-flex-basis="1009px"
+	
+></p>
+<p>实际上，在创建的kafka producer内，有2个线程，一个是主线程，也就是我们执行send方法的线程，一个是sender线程。我们来看看这两个线程分别做了什么。</p>
+<p>消息在经过分区器确定要发往那个分区之后，会被写入到record accumulator(消息累加器)，并且会将若干条消息合并为一个record batch，每个record batch的大小由参数batch.size指定，默认16K。将多条消息合并是为了减少发送消息的次数，这样原本需要多次发送的消息只需要一次发送即可，当然这里还没实际执行发送的。每个record batch其实是放在一个双向队列Deque里的，消息在被发到消息收集器record accumulator后会找到自己所属的分区对应的deque，并判断需要将消息加入到队尾的record batch还是新建一个record batch。这里有个问题，如果消息超过了record batch的大小会怎么样？其实会按照消息大小来新建一个record batch，不过这个新建的record batch使用完毕就被回收了。而一般的record batch则会被复用。</p>
+<p>消息是数据，需要实际的发送给物理节点broker，所以record accumulator里的record batch其实会被sender线程封装为request执行实际的发送。那么每个producer是怎么知道每个partition是实际的对应的那个物理节点呢，其实每个producer在启动时都会选择一个Node来查询整个集群的元数据(集群leader,flower,borker地址等信息)，这里选择的Node是producer感知到的负载最小的Node，比如途中分区2对应的Node2，它的被发送的Request只有1个，客户端感知到Node2的负载是最小的，所以会向Node2去查询元数据。sender根据每个partition对应的broker信息后，将消息累加器里partition: record batch的映射关系转换为node: request的对应关系，并将数据实际的发送到对应的node里。为了提高发送速度，kafka并不会要求每个request都响应后才允许发送下下一个request，而是允许同时发送若干个request，通过参数max.in.flight.request.per.connection配置，默认是5(在某些顺序要求比较严格的场景下，这个值都是配成1的，比如mysql binlog)。到达这个值，则会阻塞向本Node发送的消息，直到收到Response，再清理对应的record accumulator里的record batch。</p>
+<p>以上就是消息发送时，客户端做的事情，其实我们在消息发送时还可以设置很多参数，在这个流程里没有讲解，这里我列举一下</p>
+<ul>
+<li>acks
+控制消息在发送到leader毕后需要多少flower回复，0不等待任何回复，1只需要一个flower确认，-1必须所有flower确认。一般在消息可靠性保障等级比较高的场景下回设置为-1。</li>
+<li>compression.type
+producer可以在消息发送之前使用压缩的方式将消息大小减少，更加能增加吞吐量，但是因为在客户端进行压缩，服务端解压缩又额外增加了延迟。默认none不执行压缩。</li>
+<li>retries
+控制消息发送失败后的重试次数，默认0，不进行任何重试。</li>
+<li>linger.ms
+每个record batch被发送出去时需要等待的时间，默认0，表示有可以发送的request窗口时立刻发送。</li>
+<li>request.timeout.ms
+请求超时时间。默认3000ms</li>
+</ul>
+<h1 id="end">END
+</h1>
+</section>
+
+
+    <footer class="article-footer">
+    
+    <section class="article-tags">
+        
+            <a href="/tags/kafka/">Kafka</a>
+        
+            <a href="/tags/%E7%94%9F%E4%BA%A7%E8%80%85/">生产者</a>
+        
+    </section>
+
+
+    
+    <section class="article-copyright">
+        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-copyright" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <path d="M14.5 9a3.5 4 0 1 0 0 6" />
+</svg>
+
+
+
+        <span>Licensed under CC BY-NC-SA 4.0</span>
+    </section>
+    </footer>
+
+
+    
+</article>
+
+    
+
+    
+
+<aside class="related-content--wrapper">
+    <h2 class="section-title">相关文章</h2>
+    <div class="related-content">
+        <div class="flex article-list--tile">
+            
+                
+<article class="has-image">
+    <a href="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/">
+        
+        
+            <div class="article-image">
+                <img src="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/cover.a7d67a4faa390b1a4b7a1e4f588a26cb_hu_d9d107694da9d18a.jpg" 
+                        width="250" 
+                        height="150" 
+                        loading="lazy"
+                        alt="Featured image of post kafka数据在服务端是如何写入的"
+                        
+                        data-hash="md5-p9Z6T6o5CxpLeh5PWIomyw==">
+                
+            </div>
+        
+
+        <div class="article-details">
+            <h2 class="article-title">kafka数据在服务端是如何写入的</h2>
+        </div>
+    </a>
+</article>
+
+            
+        </div>
+    </div>
+</aside>
+
+     
+    
+        
+    <div class="disqus-container">
+    <div id="disqus_thread"></div>
+<script>
+    window.disqus_config = function () {
+    
+    
+    
+    };
+    (function() {
+        if (["localhost", "127.0.0.1"].indexOf(window.location.hostname) != -1) {
+            document.getElementById('disqus_thread').innerHTML = 'Disqus comments not available by default when the website is previewed locally.';
+            return;
+        }
+        var d = document, s = d.createElement('script'); s.async = true;
+        s.src = '//' + "hugo-theme-stack" + '.disqus.com/embed.js';
+        s.setAttribute('data-timestamp', +new Date());
+        (d.head || d.body).appendChild(s);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+<a href="https://disqus.com" class="dsq-brlink">comments powered by <span class="logo-disqus">Disqus</span></a>
+</div>
+
+<style>
+    .disqus-container {
+        background-color: var(--card-background);
+        border-radius: var(--card-border-radius);
+        box-shadow: var(--shadow-l1);
+        padding: var(--card-padding);
+    }
+</style>
+
+<script>
+    window.addEventListener('onColorSchemeChange', (e) => {
+        if (typeof DISQUS == 'object') {
+            DISQUS.reset({
+                reload: true
+            });
+        }
+    })
+</script>
+
+    
+
+    <footer class="site-footer">
+    <section class="copyright">
+        &copy; 
+        
+        2025 javashitu
+    </section>
+    
+    <section class="powerby">
+        使用 <a href="https://gohugo.io/" target="_blank" rel="noopener">Hugo</a> 构建 <br />
+        主题 <b><a href="https://github.com/CaiJimmy/hugo-theme-stack" target="_blank" rel="noopener" data-version="3.30.0">Stack</a></b> 由 <a href="https://jimmycai.com" target="_blank" rel="noopener">Jimmy</a> 设计
+    </section>
+</footer>
+
+
+    
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+    
+    <div class="pswp__bg"></div>
+
+    
+    <div class="pswp__scroll-wrap">
+
+        
+        <div class="pswp__container">
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+        </div>
+
+        
+        <div class="pswp__ui pswp__ui--hidden">
+
+            <div class="pswp__top-bar">
+
+                
+
+                <div class="pswp__counter"></div>
+
+                <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+
+                <button class="pswp__button pswp__button--share" title="Share"></button>
+
+                <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+
+                <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+
+                
+                
+                <div class="pswp__preloader">
+                    <div class="pswp__preloader__icn">
+                        <div class="pswp__preloader__cut">
+                            <div class="pswp__preloader__donut"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+                <div class="pswp__share-tooltip"></div>
+            </div>
+
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+            </button>
+
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+            </button>
+
+            <div class="pswp__caption">
+                <div class="pswp__caption__center"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div><script 
+                src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"integrity="sha256-ePwmChbbvXbsO02lbM3HoHbSHTHFAeChekF1xKJdleo="crossorigin="anonymous"
+                defer
+                >
+            </script><script 
+                src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"integrity="sha256-UKkzOn/w1mBxRmLLGrSeyB4e1xbrp4xylgAWb3M42pU="crossorigin="anonymous"
+                defer
+                >
+            </script><link 
+                rel="stylesheet" 
+                href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"crossorigin="anonymous"
+            ><link 
+                rel="stylesheet" 
+                href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"crossorigin="anonymous"
+            >
+
+            </main>
+        </div>
+        <script 
+                src="https://cdn.jsdelivr.net/npm/node-vibrant@3.1.6/dist/vibrant.min.js"integrity="sha256-awcR2jno4kI5X0zL8ex0vi2z&#43;KMkF24hUW8WePSA9HM="crossorigin="anonymous"
+                
+                >
+            </script><script type="text/javascript" src="/ts/main.3a1a8966cafbfc78457f276ea131a0bdd7155858067cf76100572a15ddfcb82a.js" defer></script>
+<script>
+    (function () {
+        const customFont = document.createElement('link');
+        customFont.href = "https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap";
+
+        customFont.type = "text/css";
+        customFont.rel = "stylesheet";
+
+        document.head.appendChild(customFont);
+    }());
+</script>
+
+    </body>
+</html>

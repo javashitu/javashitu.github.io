@@ -1,0 +1,1140 @@
+<!DOCTYPE html>
+<html lang="zh-cn" dir="ltr">
+    <head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'><meta name='description' content="学习背景 经过了垃圾回收器的理论学习，我们基本掌握了垃圾回收器的一些基本思想。但是想达到能随便应对面试的情况还不够，我们还需要了解一些具体的垃圾回收器的执行过程，以此来让面试官感觉耳目一新。如果没看过垃圾回收器理论的朋友可以看一下我的上一篇文章。\n垃圾回收器介绍 G1(Garbage First)垃圾回收器 G1垃圾收集器在JDK7被开发出来，JDK8功能基本完全实现。并且成功替换掉了Parallel Scavenge成为了服务端模式下默认的垃圾收集器。对比起另外一个垃圾回收器CMS，G1不仅能提供能提供规整的内存，而且能够实现可预测的停顿，能够将垃圾回收时间控制在N毫秒内。这种“可预测的停顿”和高吞吐量特性让G1被称为&quot;功能最全的垃圾回收器&quot;。\nG1同时回收新生代和老年代，但是分别被称为G1的Young GC模式和Mixed GC模式。这个特性来源于G1独特的内存布局，内存分配不再严格遵守新生代，老年代的划分，而是以Region为单位，G1跟踪各个Region的并且维护一个关于Region的优先级列表。在合适的时机选择合适的Region进行回收。这种基于Region的内存划分为一些巧妙的设计思想提供了解决停顿时间和高吞吐的基础。接下来我们将详细讲解G1的详细垃圾回收过程和里面可圈可点的设计。\nRegion内存划分 G1将堆划分为一系列大小不等的内存区域，称为Region(单词语义范围，地区，接下来我简述为分区)。每个region为1-32M，都是2的n次幂。在分代垃圾回收算法的思想下，region逻辑上划分为Eden，Survivor和老年代。每个分区都可能是eden区，Survivor区也可能是old区，但在一个时刻只能是一种分区。各种角色的region个数都是不固定的，这说明每个代的内存也是不固定的。这些region在逻辑上是连续的，而不是物理上连续，这点和之前的young/old区物理连续很不一样。\n除了前面说的Eden区，Survivor区，old区，G1中还有一种特殊的分区，Humongous区。Humongous用于存放大对象。当一个对象的容量超过了Region大小的一半，就会把这个对象放进Humongous分区，因为如果对一个短期存在的大对象使用复制算法回收的话，复制成本非常高。而直接放进old区则导致原本应该短期存在的对象占用了老年代的内存，更加不利于回收性能。如果一个对象的大小超过了一个Region的大小，那么就需要找到连续的Humogous分区来存放这个大对象。有时候因为找不到连续的Humogous分区甚至不得不开启Full GC。\nRegion内部结构 Card Table卡表 Card Table是Region的内部结构划分。每个region内部被划分为若干的内存块，被称为card。这些card集合被称为card table，卡表。\n比如下面的例子，region1中的内存区域被划分为9块card，9块card的集合就是卡表card table。\nRset记忆集合 除了卡表，每个region中都含有Remember Set，简称RSet。RSet其实是hash表，key为引用本region的其他region起始地址，value为本region中被key对应的region引用的card索引位置。\n这里必须讲解一下RSet存在的原因，RSet是为了解决&quot;跨代引用&quot;。想象一下，一个新生代对象被老年代对象引用，那么为了通过引用链找到这个新生代对象，从GC Roots出发遍历对象时必须经过老年代对象。实际上以这种方式遍历时，是把所有对象都遍历了一遍。但是我们的其实只想回收新生代的对象，却把所有对象都遍历了一遍，这无疑很低效。\n在YoungGC时，当RSet存在时，顺着引用链查找引用。如果引用链上出现了老年代对象，那么直接放弃查找这条引用链。当整个GC Root Tracing执行完毕后，就知道了除被跨代引用外还存活的新生代对象。紧接着再遍历新生代Region的RSet，如果RSet里存在key为老年代的Region，就将key对应的value代表的card的对象标记为存活，这样就标记到了被跨代引用的新生代对象。\n当然这么做会存在一个问题，如果部分老年代对象是应该被回收的对象，但还是跨代引用了新生代，会导致原本应该被回收的新生代对象躲过本轮新生代回收。这部分对象就只能等到后续的老年代的垃圾回收mixed GC来回收掉。这也是为什么G1的回收精度比较低的原因之一。\n以这幅图为例，region1和region2都引用了region3中的对象，那么region3的RSet中有两个key，分别是region1的起始地址和region2的起始地址。\n在扫描region3的RSet时，发现key为0x6a的region是一个old区region。如果这时第3，5card对应的对象没有被标记为可达，那么这里就会根据RSet再次标记。\n同样的，key为0x9b对应的region是一个young区域的region，那么0，2号card的对象则不会被标记。\nYoung GC流程 在了解了region的内部结构之后，我们再来看一下G1的young gc的具体流程。\nstop the world，整个young gc的流程都是在stw里进行的，这也是为什么young gc能回收全部eden区域的原因。控制young gc开销的办法只有减少young region的个数，也就是减少年轻代内存的大小，还有就是并发，多个线程同时进行gc，尽量减少stw时间。\n扫描GCRoots，注意这里扫描的GC Roots就是一般意义上的GC Roots，是扫描的直接指向young代的对象，那如果GC Root是直接指向老年代对象的，则会直接停止在这一步，也就是不往下扫描了。被老年代对象指向的young代对象会在接下来的利用Rset中key指向老年代的卡表识别出来，这样就避免了对老年代整个大的heap扫描，提高了效率。这也是为什么Rset能避免对老年代整体扫描的原因。\n排空dirty card quene，更新Rset。Rset中记录了哪些对象被老年代跨带引用，也就是当新生代对象被老年代对象引用时，应该更新这个记录到RSet中。但更新RSet记录的时机不是伴随着引用更改马上发生的。每当老年代引用新生代对象时，这个引用记录对应的card地址其实会被放入Dirty Card Queue（线程私有的，当线程私有的dirty card queue满了之后会被转移到全局的dirty card queue，这个全局是惟一的），原因是如果每次更新引用时直接更新Rset会导致多线程竞争，因为赋值操作很频繁，影响性能。所以更新Rset交由Refinement线程来进行。全局DirtyCardQueue的容量变化分为4个阶段\n">
+<title>jvm垃圾回收器后篇</title>
+
+<link rel='canonical' href='http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/'>
+
+<link rel="stylesheet" href="/scss/style.min.946cca6c6259ef94ac55abfae7c7bf3291ea3ed5eea17ef77500b257217c6710.css"><meta property='og:title' content="jvm垃圾回收器后篇">
+<meta property='og:description' content="学习背景 经过了垃圾回收器的理论学习，我们基本掌握了垃圾回收器的一些基本思想。但是想达到能随便应对面试的情况还不够，我们还需要了解一些具体的垃圾回收器的执行过程，以此来让面试官感觉耳目一新。如果没看过垃圾回收器理论的朋友可以看一下我的上一篇文章。\n垃圾回收器介绍 G1(Garbage First)垃圾回收器 G1垃圾收集器在JDK7被开发出来，JDK8功能基本完全实现。并且成功替换掉了Parallel Scavenge成为了服务端模式下默认的垃圾收集器。对比起另外一个垃圾回收器CMS，G1不仅能提供能提供规整的内存，而且能够实现可预测的停顿，能够将垃圾回收时间控制在N毫秒内。这种“可预测的停顿”和高吞吐量特性让G1被称为&quot;功能最全的垃圾回收器&quot;。\nG1同时回收新生代和老年代，但是分别被称为G1的Young GC模式和Mixed GC模式。这个特性来源于G1独特的内存布局，内存分配不再严格遵守新生代，老年代的划分，而是以Region为单位，G1跟踪各个Region的并且维护一个关于Region的优先级列表。在合适的时机选择合适的Region进行回收。这种基于Region的内存划分为一些巧妙的设计思想提供了解决停顿时间和高吞吐的基础。接下来我们将详细讲解G1的详细垃圾回收过程和里面可圈可点的设计。\nRegion内存划分 G1将堆划分为一系列大小不等的内存区域，称为Region(单词语义范围，地区，接下来我简述为分区)。每个region为1-32M，都是2的n次幂。在分代垃圾回收算法的思想下，region逻辑上划分为Eden，Survivor和老年代。每个分区都可能是eden区，Survivor区也可能是old区，但在一个时刻只能是一种分区。各种角色的region个数都是不固定的，这说明每个代的内存也是不固定的。这些region在逻辑上是连续的，而不是物理上连续，这点和之前的young/old区物理连续很不一样。\n除了前面说的Eden区，Survivor区，old区，G1中还有一种特殊的分区，Humongous区。Humongous用于存放大对象。当一个对象的容量超过了Region大小的一半，就会把这个对象放进Humongous分区，因为如果对一个短期存在的大对象使用复制算法回收的话，复制成本非常高。而直接放进old区则导致原本应该短期存在的对象占用了老年代的内存，更加不利于回收性能。如果一个对象的大小超过了一个Region的大小，那么就需要找到连续的Humogous分区来存放这个大对象。有时候因为找不到连续的Humogous分区甚至不得不开启Full GC。\nRegion内部结构 Card Table卡表 Card Table是Region的内部结构划分。每个region内部被划分为若干的内存块，被称为card。这些card集合被称为card table，卡表。\n比如下面的例子，region1中的内存区域被划分为9块card，9块card的集合就是卡表card table。\nRset记忆集合 除了卡表，每个region中都含有Remember Set，简称RSet。RSet其实是hash表，key为引用本region的其他region起始地址，value为本region中被key对应的region引用的card索引位置。\n这里必须讲解一下RSet存在的原因，RSet是为了解决&quot;跨代引用&quot;。想象一下，一个新生代对象被老年代对象引用，那么为了通过引用链找到这个新生代对象，从GC Roots出发遍历对象时必须经过老年代对象。实际上以这种方式遍历时，是把所有对象都遍历了一遍。但是我们的其实只想回收新生代的对象，却把所有对象都遍历了一遍，这无疑很低效。\n在YoungGC时，当RSet存在时，顺着引用链查找引用。如果引用链上出现了老年代对象，那么直接放弃查找这条引用链。当整个GC Root Tracing执行完毕后，就知道了除被跨代引用外还存活的新生代对象。紧接着再遍历新生代Region的RSet，如果RSet里存在key为老年代的Region，就将key对应的value代表的card的对象标记为存活，这样就标记到了被跨代引用的新生代对象。\n当然这么做会存在一个问题，如果部分老年代对象是应该被回收的对象，但还是跨代引用了新生代，会导致原本应该被回收的新生代对象躲过本轮新生代回收。这部分对象就只能等到后续的老年代的垃圾回收mixed GC来回收掉。这也是为什么G1的回收精度比较低的原因之一。\n以这幅图为例，region1和region2都引用了region3中的对象，那么region3的RSet中有两个key，分别是region1的起始地址和region2的起始地址。\n在扫描region3的RSet时，发现key为0x6a的region是一个old区region。如果这时第3，5card对应的对象没有被标记为可达，那么这里就会根据RSet再次标记。\n同样的，key为0x9b对应的region是一个young区域的region，那么0，2号card的对象则不会被标记。\nYoung GC流程 在了解了region的内部结构之后，我们再来看一下G1的young gc的具体流程。\nstop the world，整个young gc的流程都是在stw里进行的，这也是为什么young gc能回收全部eden区域的原因。控制young gc开销的办法只有减少young region的个数，也就是减少年轻代内存的大小，还有就是并发，多个线程同时进行gc，尽量减少stw时间。\n扫描GCRoots，注意这里扫描的GC Roots就是一般意义上的GC Roots，是扫描的直接指向young代的对象，那如果GC Root是直接指向老年代对象的，则会直接停止在这一步，也就是不往下扫描了。被老年代对象指向的young代对象会在接下来的利用Rset中key指向老年代的卡表识别出来，这样就避免了对老年代整个大的heap扫描，提高了效率。这也是为什么Rset能避免对老年代整体扫描的原因。\n排空dirty card quene，更新Rset。Rset中记录了哪些对象被老年代跨带引用，也就是当新生代对象被老年代对象引用时，应该更新这个记录到RSet中。但更新RSet记录的时机不是伴随着引用更改马上发生的。每当老年代引用新生代对象时，这个引用记录对应的card地址其实会被放入Dirty Card Queue（线程私有的，当线程私有的dirty card queue满了之后会被转移到全局的dirty card queue，这个全局是惟一的），原因是如果每次更新引用时直接更新Rset会导致多线程竞争，因为赋值操作很频繁，影响性能。所以更新Rset交由Refinement线程来进行。全局DirtyCardQueue的容量变化分为4个阶段\n">
+<meta property='og:url' content='http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/'>
+<meta property='og:site_name' content='javashitu'>
+<meta property='og:type' content='article'><meta property='article:section' content='Post' /><meta property='article:tag' content='jvm' /><meta property='article:tag' content='垃圾回收器' /><meta property='article:tag' content='ZGC' /><meta property='article:tag' content='G1' /><meta property='article:published_time' content='2023-12-31T00:00:00&#43;00:00'/><meta property='article:modified_time' content='2023-12-31T00:00:00&#43;00:00'/><meta property='og:image' content='http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/cover.jpg' />
+<meta name="twitter:title" content="jvm垃圾回收器后篇">
+<meta name="twitter:description" content="学习背景 经过了垃圾回收器的理论学习，我们基本掌握了垃圾回收器的一些基本思想。但是想达到能随便应对面试的情况还不够，我们还需要了解一些具体的垃圾回收器的执行过程，以此来让面试官感觉耳目一新。如果没看过垃圾回收器理论的朋友可以看一下我的上一篇文章。\n垃圾回收器介绍 G1(Garbage First)垃圾回收器 G1垃圾收集器在JDK7被开发出来，JDK8功能基本完全实现。并且成功替换掉了Parallel Scavenge成为了服务端模式下默认的垃圾收集器。对比起另外一个垃圾回收器CMS，G1不仅能提供能提供规整的内存，而且能够实现可预测的停顿，能够将垃圾回收时间控制在N毫秒内。这种“可预测的停顿”和高吞吐量特性让G1被称为&quot;功能最全的垃圾回收器&quot;。\nG1同时回收新生代和老年代，但是分别被称为G1的Young GC模式和Mixed GC模式。这个特性来源于G1独特的内存布局，内存分配不再严格遵守新生代，老年代的划分，而是以Region为单位，G1跟踪各个Region的并且维护一个关于Region的优先级列表。在合适的时机选择合适的Region进行回收。这种基于Region的内存划分为一些巧妙的设计思想提供了解决停顿时间和高吞吐的基础。接下来我们将详细讲解G1的详细垃圾回收过程和里面可圈可点的设计。\nRegion内存划分 G1将堆划分为一系列大小不等的内存区域，称为Region(单词语义范围，地区，接下来我简述为分区)。每个region为1-32M，都是2的n次幂。在分代垃圾回收算法的思想下，region逻辑上划分为Eden，Survivor和老年代。每个分区都可能是eden区，Survivor区也可能是old区，但在一个时刻只能是一种分区。各种角色的region个数都是不固定的，这说明每个代的内存也是不固定的。这些region在逻辑上是连续的，而不是物理上连续，这点和之前的young/old区物理连续很不一样。\n除了前面说的Eden区，Survivor区，old区，G1中还有一种特殊的分区，Humongous区。Humongous用于存放大对象。当一个对象的容量超过了Region大小的一半，就会把这个对象放进Humongous分区，因为如果对一个短期存在的大对象使用复制算法回收的话，复制成本非常高。而直接放进old区则导致原本应该短期存在的对象占用了老年代的内存，更加不利于回收性能。如果一个对象的大小超过了一个Region的大小，那么就需要找到连续的Humogous分区来存放这个大对象。有时候因为找不到连续的Humogous分区甚至不得不开启Full GC。\nRegion内部结构 Card Table卡表 Card Table是Region的内部结构划分。每个region内部被划分为若干的内存块，被称为card。这些card集合被称为card table，卡表。\n比如下面的例子，region1中的内存区域被划分为9块card，9块card的集合就是卡表card table。\nRset记忆集合 除了卡表，每个region中都含有Remember Set，简称RSet。RSet其实是hash表，key为引用本region的其他region起始地址，value为本region中被key对应的region引用的card索引位置。\n这里必须讲解一下RSet存在的原因，RSet是为了解决&quot;跨代引用&quot;。想象一下，一个新生代对象被老年代对象引用，那么为了通过引用链找到这个新生代对象，从GC Roots出发遍历对象时必须经过老年代对象。实际上以这种方式遍历时，是把所有对象都遍历了一遍。但是我们的其实只想回收新生代的对象，却把所有对象都遍历了一遍，这无疑很低效。\n在YoungGC时，当RSet存在时，顺着引用链查找引用。如果引用链上出现了老年代对象，那么直接放弃查找这条引用链。当整个GC Root Tracing执行完毕后，就知道了除被跨代引用外还存活的新生代对象。紧接着再遍历新生代Region的RSet，如果RSet里存在key为老年代的Region，就将key对应的value代表的card的对象标记为存活，这样就标记到了被跨代引用的新生代对象。\n当然这么做会存在一个问题，如果部分老年代对象是应该被回收的对象，但还是跨代引用了新生代，会导致原本应该被回收的新生代对象躲过本轮新生代回收。这部分对象就只能等到后续的老年代的垃圾回收mixed GC来回收掉。这也是为什么G1的回收精度比较低的原因之一。\n以这幅图为例，region1和region2都引用了region3中的对象，那么region3的RSet中有两个key，分别是region1的起始地址和region2的起始地址。\n在扫描region3的RSet时，发现key为0x6a的region是一个old区region。如果这时第3，5card对应的对象没有被标记为可达，那么这里就会根据RSet再次标记。\n同样的，key为0x9b对应的region是一个young区域的region，那么0，2号card的对象则不会被标记。\nYoung GC流程 在了解了region的内部结构之后，我们再来看一下G1的young gc的具体流程。\nstop the world，整个young gc的流程都是在stw里进行的，这也是为什么young gc能回收全部eden区域的原因。控制young gc开销的办法只有减少young region的个数，也就是减少年轻代内存的大小，还有就是并发，多个线程同时进行gc，尽量减少stw时间。\n扫描GCRoots，注意这里扫描的GC Roots就是一般意义上的GC Roots，是扫描的直接指向young代的对象，那如果GC Root是直接指向老年代对象的，则会直接停止在这一步，也就是不往下扫描了。被老年代对象指向的young代对象会在接下来的利用Rset中key指向老年代的卡表识别出来，这样就避免了对老年代整个大的heap扫描，提高了效率。这也是为什么Rset能避免对老年代整体扫描的原因。\n排空dirty card quene，更新Rset。Rset中记录了哪些对象被老年代跨带引用，也就是当新生代对象被老年代对象引用时，应该更新这个记录到RSet中。但更新RSet记录的时机不是伴随着引用更改马上发生的。每当老年代引用新生代对象时，这个引用记录对应的card地址其实会被放入Dirty Card Queue（线程私有的，当线程私有的dirty card queue满了之后会被转移到全局的dirty card queue，这个全局是惟一的），原因是如果每次更新引用时直接更新Rset会导致多线程竞争，因为赋值操作很频繁，影响性能。所以更新Rset交由Refinement线程来进行。全局DirtyCardQueue的容量变化分为4个阶段\n"><meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content='http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/cover.jpg' />
+    </head>
+    <body class="
+    article-page
+    ">
+    <script>
+        (function() {
+            const colorSchemeKey = 'StackColorScheme';
+            if(!localStorage.getItem(colorSchemeKey)){
+                localStorage.setItem(colorSchemeKey, "auto");
+            }
+        })();
+    </script><script>
+    (function() {
+        const colorSchemeKey = 'StackColorScheme';
+        const colorSchemeItem = localStorage.getItem(colorSchemeKey);
+        const supportDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches === true;
+
+        if (colorSchemeItem == 'dark' || colorSchemeItem === 'auto' && supportDarkMode) {
+            
+
+            document.documentElement.dataset.scheme = 'dark';
+        } else {
+            document.documentElement.dataset.scheme = 'light';
+        }
+    })();
+</script>
+<div class="container main-container flex on-phone--column extended"><aside class="sidebar left-sidebar sticky ">
+    <button class="hamburger hamburger--spin" type="button" id="toggle-menu" aria-label="切换菜单">
+        <span class="hamburger-box">
+            <span class="hamburger-inner"></span>
+        </span>
+    </button>
+
+    <header>
+        
+            
+            <figure class="site-avatar">
+                <a href="/">
+                
+                    
+                    
+                    
+                        
+                        <img src="/img/javashitu_hu_4b8114d532ed8b7b.jpg" width="300"
+                            height="300" class="site-logo" loading="lazy" alt="Avatar">
+                    
+                
+                </a>
+                
+            </figure>
+            
+        
+        
+        <div class="site-meta">
+            <h1 class="site-name"><a href="/">javashitu</a></h1>
+            <h2 class="site-description">联系我请➕微信javashitu</h2>
+        </div>
+    </header><ol class="menu-social">
+            
+                <li>
+                    <a 
+                        href='https://github.com/javashitu'
+                        target="_blank"
+                        title="GitHub"
+                        rel="me"
+                    >
+                        
+                        
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-brand-github" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5" />
+</svg>
+
+
+
+                        
+                    </a>
+                </li>
+            
+        </ol><ol class="menu" id="main-menu">
+        
+        
+        
+        <li >
+            <a href='/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-home" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <polyline points="5 12 3 12 12 3 21 12 19 12" />
+  <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7" />
+  <path d="M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6" />
+</svg>
+
+
+
+                
+                <span>主页</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/%E5%85%B3%E4%BA%8E/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-user" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="7" r="4" />
+  <path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />
+</svg>
+
+
+
+                
+                <span>关于</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/archives/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-archive" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <rect x="3" y="4" width="18" height="4" rx="2" />
+  <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-10" />
+  <line x1="10" y1="12" x2="14" y2="12" />
+</svg>
+
+
+
+                
+                <span>Archives</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/search/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-search" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="10" cy="10" r="7" />
+  <line x1="21" y1="21" x2="15" y2="15" />
+</svg>
+
+
+
+                
+                <span>Search</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/links/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-link" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <path d="M10 14a3.5 3.5 0 0 0 5 0l4 -4a3.5 3.5 0 0 0 -5 -5l-.5 .5" />
+  <path d="M14 10a3.5 3.5 0 0 0 -5 0l-4 4a3.5 3.5 0 0 0 5 5l.5 -.5" />
+</svg>
+
+
+
+                
+                <span>Links</span>
+            </a>
+        </li>
+        
+        <li class="menu-bottom-section">
+            <ol class="menu">
+                    
+                        <li id="i18n-switch">  
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-language" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M4 5h7" />
+  <path d="M9 3v2c0 4.418 -2.239 8 -5 8" />
+  <path d="M5 9c-.003 2.144 2.952 3.908 6.7 4" />
+  <path d="M12 20l4 -9l4 9" />
+  <path d="M19.1 18h-6.2" />
+</svg>
+
+
+
+                            <select name="language" title="language" onchange="window.location.href = this.selectedOptions[0].value">
+                                
+                                    <option value="http://localhost:1313/en/" >English</option>
+                                
+                                    <option value="http://localhost:1313/" selected>中文</option>
+                                
+                            </select>
+                        </li>
+                    
+                
+
+                
+                    <li id="dark-mode-toggle">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-left" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="8" cy="12" r="2" />
+  <rect x="2" y="6" width="20" height="12" rx="6" />
+</svg>
+
+
+
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-right" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="16" cy="12" r="2" />
+  <rect x="2" y="6" width="20" height="12" rx="6" />
+</svg>
+
+
+
+                        <span>暗色模式</span>
+                    </li>
+                
+            </ol>
+        </li>
+    </ol>
+</aside>
+
+    <aside class="sidebar right-sidebar sticky">
+        
+            
+                
+    <section class="widget archives">
+        <div class="widget-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-hash" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <line x1="5" y1="9" x2="19" y2="9" />
+  <line x1="5" y1="15" x2="19" y2="15" />
+  <line x1="11" y1="4" x2="7" y2="20" />
+  <line x1="17" y1="4" x2="13" y2="20" />
+</svg>
+
+
+
+        </div>
+        <h2 class="widget-title section-title">目录</h2>
+        
+        <div class="widget--toc">
+            <nav id="TableOfContents">
+  <ol>
+    <li><a href="#g1garbage-first垃圾回收器">G1(Garbage First)垃圾回收器</a>
+      <ol>
+        <li><a href="#region内存划分">Region内存划分</a></li>
+        <li><a href="#region内部结构">Region内部结构</a>
+          <ol>
+            <li><a href="#card-table卡表">Card Table卡表</a></li>
+            <li><a href="#rset记忆集合">Rset记忆集合</a></li>
+          </ol>
+        </li>
+        <li><a href="#young-gc流程">Young GC流程</a></li>
+        <li><a href="#三色标记算法">三色标记算法</a>
+          <ol>
+            <li></li>
+            <li><a href="#已经存在的对象被漏标">已经存在的对象被漏标</a></li>
+            <li><a href="#新产生的对象被漏标">新产生的对象被漏标</a></li>
+            <li><a href="#satb">SATB</a></li>
+          </ol>
+        </li>
+        <li><a href="#mixed-gc">Mixed GC</a></li>
+        <li><a href="#g1点评">G1点评</a></li>
+      </ol>
+    </li>
+    <li><a href="#zgc">ZGC</a>
+      <ol>
+        <li><a href="#page内存布局">Page内存布局</a></li>
+        <li><a href="#内存回收算法">内存回收算法</a>
+          <ol>
+            <li><a href="#染色指针">染色指针</a></li>
+            <li><a href="#读屏障">读屏障</a></li>
+            <li><a href="#numa">NUMA</a></li>
+          </ol>
+        </li>
+        <li><a href="#zgc流程">ZGC流程</a></li>
+        <li><a href="#zgc点评">ZGC点评</a></li>
+      </ol>
+    </li>
+  </ol>
+</nav>
+        </div>
+    </section>
+
+            
+        
+    </aside>
+
+
+            <main class="main full-width">
+    <article class="has-image main-article">
+    <header class="article-header">
+        <div class="article-image">
+            <a href="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/">
+                <img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/cover_hu_8afc1045b7b3006c.jpg"
+                        srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/cover_hu_8afc1045b7b3006c.jpg 800w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/cover_hu_23a7a2601b92d54f.jpg 1600w"
+                        width="800" 
+                        height="565" 
+                        loading="lazy"
+                        alt="Featured image of post jvm垃圾回收器后篇" />
+                
+            </a>
+        </div>
+    
+
+    <div class="article-details">
+    
+    <header class="article-category">
+        
+            <a href="/categories/jvm/" >
+                Jvm
+            </a>
+        
+    </header>
+    
+
+    <div class="article-title-wrapper">
+        <h2 class="article-title">
+            <a href="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/">jvm垃圾回收器后篇</a>
+        </h2>
+    
+        
+    </div>
+
+    
+    
+    
+    
+    <footer class="article-time">
+        
+            <div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-calendar-time" width="56" height="56" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <path d="M11.795 21h-6.795a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v4" />
+  <circle cx="18" cy="18" r="4" />
+  <path d="M15 3v4" />
+  <path d="M7 3v4" />
+  <path d="M3 11h16" />
+  <path d="M18 16.496v1.504l1 1" />
+</svg>
+                <time class="article-time--published">2023-12-31</time>
+            </div>
+        
+
+        
+            <div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-clock" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <polyline points="12 7 12 12 15 15" />
+</svg>
+
+
+
+                
+                <time class="article-time--reading">
+                    
+                    55min
+                </time>
+            </div>
+        
+    </footer>
+    
+
+    
+</div>
+
+</header>
+
+    <section class="article-content">
+    
+    
+    <h1 id="学习背景">学习背景
+</h1><p>经过了垃圾回收器的理论学习，我们基本掌握了垃圾回收器的一些基本思想。但是想达到能随便应对面试的情况还不够，我们还需要了解一些具体的垃圾回收器的执行过程，以此来让面试官感觉耳目一新。如果没看过垃圾回收器理论的朋友可以看一下我的上一篇文章。</p>
+<h1 id="垃圾回收器介绍">垃圾回收器介绍
+</h1><h2 id="g1garbage-first垃圾回收器">G1(Garbage First)垃圾回收器
+</h2><p>G1垃圾收集器在JDK7被开发出来，JDK8功能基本完全实现。并且成功替换掉了Parallel Scavenge成为了服务端模式下默认的垃圾收集器。对比起另外一个垃圾回收器CMS，G1不仅能提供能提供规整的内存，而且能够实现可预测的停顿，能够将垃圾回收时间控制在N毫秒内。这种“可预测的停顿”和高吞吐量特性让G1被称为&quot;功能最全的垃圾回收器&quot;。</p>
+<p>G1同时回收新生代和老年代，但是分别被称为G1的Young GC模式和Mixed GC模式。这个特性来源于G1独特的内存布局，内存分配不再严格遵守新生代，老年代的划分，而是以Region为单位，G1跟踪各个Region的并且维护一个关于Region的优先级列表。在合适的时机选择合适的Region进行回收。这种基于Region的内存划分为一些巧妙的设计思想提供了解决停顿时间和高吞吐的基础。接下来我们将详细讲解G1的详细垃圾回收过程和里面可圈可点的设计。</p>
+<h3 id="region内存划分">Region内存划分
+</h3><p>G1将堆划分为一系列大小不等的内存区域，称为Region(单词语义范围，地区，接下来我简述为分区)。每个region为1-32M，都是2的n次幂。在分代垃圾回收算法的思想下，region逻辑上划分为Eden，Survivor和老年代。每个分区都可能是eden区，Survivor区也可能是old区，但在一个时刻只能是一种分区。各种角色的region个数都是不固定的，这说明每个代的内存也是不固定的。这些region在逻辑上是连续的，而不是物理上连续，这点和之前的young/old区物理连续很不一样。</p>
+<p>除了前面说的Eden区，Survivor区，old区，G1中还有一种特殊的分区，Humongous区。Humongous用于存放大对象。当一个对象的容量超过了Region大小的一半，就会把这个对象放进Humongous分区，因为如果对一个短期存在的大对象使用复制算法回收的话，复制成本非常高。而直接放进old区则导致原本应该短期存在的对象占用了老年代的内存，更加不利于回收性能。如果一个对象的大小超过了一个Region的大小，那么就需要找到连续的Humogous分区来存放这个大对象。有时候因为找不到连续的Humogous分区甚至不得不开启Full GC。</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/region%E5%B8%83%E5%B1%80-1755072180997.png"
+	width="2245"
+	height="1030"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/region%E5%B8%83%E5%B1%80-1755072180997_hu_d18785eda8e5a95d.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/region%E5%B8%83%E5%B1%80-1755072180997_hu_b8c9c684bad430ff.png 1024w"
+	loading="lazy"
+	
+		alt="region布局"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="217"
+		data-flex-basis="523px"
+	
+></p>
+<h3 id="region内部结构">Region内部结构
+</h3><h4 id="card-table卡表">Card Table卡表
+</h4><p>Card Table是Region的内部结构划分。每个region内部被划分为若干的内存块，被称为card。这些card集合被称为card table，卡表。</p>
+<p>比如下面的例子，region1中的内存区域被划分为9块card，9块card的集合就是卡表card table。</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E5%8D%A1%E8%A1%A8-1755072180997.png"
+	width="1988"
+	height="1771"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E5%8D%A1%E8%A1%A8-1755072180997_hu_84566f6414b0c73a.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E5%8D%A1%E8%A1%A8-1755072180997_hu_d0883803a9b2ed06.png 1024w"
+	loading="lazy"
+	
+		alt="卡表"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="112"
+		data-flex-basis="269px"
+	
+></p>
+<h4 id="rset记忆集合">Rset记忆集合
+</h4><p>除了卡表，每个region中都含有Remember Set，简称RSet。RSet其实是hash表，key为引用本region的其他region起始地址，value为本region中被key对应的region引用的card索引位置。</p>
+<p>这里必须讲解一下RSet存在的原因，RSet是为了解决&quot;跨代引用&quot;。想象一下，一个新生代对象被老年代对象引用，那么为了通过引用链找到这个新生代对象，从GC Roots出发遍历对象时必须经过老年代对象。实际上以这种方式遍历时，是把所有对象都遍历了一遍。但是我们的其实只想回收新生代的对象，却把所有对象都遍历了一遍，这无疑很低效。</p>
+<p>在YoungGC时，当RSet存在时，顺着引用链查找引用。如果引用链上出现了老年代对象，那么直接放弃查找这条引用链。当整个GC Root Tracing执行完毕后，就知道了除被跨代引用外还存活的新生代对象。紧接着再遍历新生代Region的RSet，如果RSet里存在key为老年代的Region，就将key对应的value代表的card的对象标记为存活，这样就标记到了被跨代引用的新生代对象。</p>
+<p>当然这么做会存在一个问题，如果部分老年代对象是应该被回收的对象，但还是跨代引用了新生代，会导致原本应该被回收的新生代对象躲过本轮新生代回收。这部分对象就只能等到后续的老年代的垃圾回收mixed GC来回收掉。这也是为什么G1的回收精度比较低的原因之一。</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E5%8D%A1%E8%A1%A8-4513353-1755072180997.png"
+	width="1988"
+	height="1771"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E5%8D%A1%E8%A1%A8-4513353-1755072180997_hu_e7911c7264f6eec1.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E5%8D%A1%E8%A1%A8-4513353-1755072180997_hu_c289fdeaa2be8268.png 1024w"
+	loading="lazy"
+	
+		alt="卡表"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="112"
+		data-flex-basis="269px"
+	
+></p>
+<p>以这幅图为例，region1和region2都引用了region3中的对象，那么region3的RSet中有两个key，分别是region1的起始地址和region2的起始地址。</p>
+<p>在扫描region3的RSet时，发现key为0x6a的region是一个old区region。如果这时第3，5card对应的对象没有被标记为可达，那么这里就会根据RSet再次标记。</p>
+<p>同样的，key为0x9b对应的region是一个young区域的region，那么0，2号card的对象则不会被标记。</p>
+<h3 id="young-gc流程">Young GC流程
+</h3><p>在了解了region的内部结构之后，我们再来看一下G1的young gc的具体流程。</p>
+<ol>
+<li>
+<p>stop the world，整个young gc的流程都是在stw里进行的，这也是为什么young gc能回收全部eden区域的原因。控制young gc开销的办法只有减少young region的个数，也就是减少年轻代内存的大小，还有就是并发，多个线程同时进行gc，尽量减少stw时间。</p>
+</li>
+<li>
+<p>扫描GCRoots，注意这里扫描的GC Roots就是一般意义上的GC Roots，是扫描的直接指向young代的对象，那如果GC Root是直接指向老年代对象的，则会直接停止在这一步，也就是不往下扫描了。被老年代对象指向的young代对象会在接下来的利用Rset中key指向老年代的卡表识别出来，这样就避免了对老年代整个大的heap扫描，提高了效率。这也是为什么Rset能避免对老年代整体扫描的原因。</p>
+</li>
+<li>
+<p>排空dirty card quene，更新Rset。Rset中记录了哪些对象被老年代跨带引用，也就是当新生代对象被老年代对象引用时，应该更新这个记录到RSet中。但更新RSet记录的时机不是伴随着引用更改马上发生的。每当老年代引用新生代对象时，这个引用记录对应的card地址其实会被放入Dirty Card Queue（线程私有的，当线程私有的dirty card queue满了之后会被转移到全局的dirty card queue，这个全局是惟一的），原因是如果每次更新引用时直接更新Rset会导致多线程竞争，因为赋值操作很频繁，影响性能。所以更新Rset交由Refinement线程来进行。全局DirtyCardQueue的容量变化分为4个阶段</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/dirty-card-queue%E5%AE%B9%E9%87%8F%E5%8F%98%E5%8C%96-4521888-1755072180997.png"
+	width="1214"
+	height="176"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/dirty-card-queue%E5%AE%B9%E9%87%8F%E5%8F%98%E5%8C%96-4521888-1755072180997_hu_2a3d3df9c1c870fe.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/dirty-card-queue%E5%AE%B9%E9%87%8F%E5%8F%98%E5%8C%96-4521888-1755072180997_hu_945f1754809e35d1.png 1024w"
+	loading="lazy"
+	
+		alt="dirty card queue容量变化"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="689"
+		data-flex-basis="1655px"
+	
+></p>
+<p>白色：无事发生</p>
+<p>绿色：Refinement线程被激活，-XX:G1ConcRefinementGreenZone=N指定的线程个数。从（全局和线程私有）队列中拿出dirty card。并更新到对应的Rset中</p>
+<p>黄色：产生dirty card的速度过快，激活全部的Refinement线程，通过参数-XX:G1ConcRefinementYellowZone=N 指定</p>
+<p>红色：产生dirty card的速度过快，将应用线程也加入到排空队列的工作中。目的是把应用线程拖慢，减慢dirty card产生。</p>
+</li>
+<li>
+<p>扫描Rset，扫描所有Rset中Old区到young区的引用。到这一步就确定出了young区域那些对象时存活的。</p>
+</li>
+<li>
+<p>拷贝对象到survivor区域或者晋升old区域。</p>
+</li>
+<li>
+<p>处理引用队列，软引用，弱引用，虚引用</p>
+</li>
+</ol>
+<p>以上就是young gc的全部流程。</p>
+<h3 id="三色标记算法">三色标记算法
+</h3><p>知道了Young GC的流程后，接下俩我们将学习G1针对老年代的垃圾回收过程Mixed GC，但是在正式开始介绍之前我们先讲解一下可达性分析算法的具体实现，三色标记算法。以及三色标记算法的缺陷以及G1是如何解决这个缺陷的。</p>
+<p>在可达性分析的思想指导下，我们需要标记对象是否可达，那么我们采用将对象标记为不同的颜色来区分对象是否可达。可以理解如果一个对象能从GC Roots出发并且遍历到，那么对象就是可达的，这个过程我们称为检查。</p>
+<ul>
+<li>白色：对象还没被检查。</li>
+<li>灰色：对象被检查了，但是对象的成员Field(对象中引用的其他对象)还没有被检查。这说明这个对象是可达的。</li>
+<li>黑色：对象被检查了，对象的成员Fileld也被检查了。</li>
+</ul>
+<p>那么整个检测的过程，就是从GC Roots出发不断地遍历对象，并且将可达的对象标记成黑色的过程。当标记结束时，还是白色的对象就是没被遍历到的对象，即不可达的对象。</p>
+<p>举个例子</p>
+<p>第一轮检查，找到所有的GC Roots，GC Roots被标记为灰色，有的GC Roots因为没有成员Field则被标记为黑色。</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%951-%281%29.png"
+	width="2136"
+	height="890"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%951-%281%29_hu_d5b16c539c6f1b9f.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%951-%281%29_hu_bdf63113233ba909.png 1024w"
+	loading="lazy"
+	
+		alt="三色标记算法1 (E:/blog/my-blog/jvm/2023-12-30 jvm垃圾回收器理论/index.assets/三色标记算法1 (1).png)"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="240"
+		data-flex-basis="576px"
+	
+></p>
+<p>第二轮检查，检查被GC Roots引用的对象，并标记为灰色</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%952-%281%29.png"
+	width="2136"
+	height="890"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%952-%281%29_hu_c905f18d6526dfe6.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%952-%281%29_hu_967ed7f95f4fe58a.png 1024w"
+	loading="lazy"
+	
+		alt="三色标记算法2 (E:/blog/my-blog/jvm/2023-12-30 jvm垃圾回收器理论/index.assets/三色标记算法2 (1).png)"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="240"
+		data-flex-basis="576px"
+	
+></p>
+<p>第三轮检查，循环之前的步骤，将被标记为灰色对象的子Field检查。因为这里就假设了3次循环检查的对象，所以是最后一次检查。这一路检查结束，还是白色的对象就是可以被回收的对象。即图例里的objectC</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%953-%281%29.png"
+	width="2136"
+	height="890"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%953-%281%29_hu_d6abdc7b431324e5.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%953-%281%29_hu_2b2ea097f1e3d3a9.png 1024w"
+	loading="lazy"
+	
+		alt="三色标记算法3 (E:/blog/my-blog/jvm/2023-12-30 jvm垃圾回收器理论/index.assets/三色标记算法3 (1).png)"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="240"
+		data-flex-basis="576px"
+	
+></p>
+<p>以上描述的是一轮三色标记算法的工作过程，但是这是一个理想情况，因为标记过程中，标记的线程是和用户线程交替运行的，所以可能出现标记过程中引用发生变化的情况。试想一下，在第二轮检查到第三轮检查之间，假设发生了引用的变化，objectD不再被objectB引用，而是被objectA引用，而且此时ObjectA的成员已经被检查完毕了，objectB的成员Field还没被检查。这时，objectD就永远不会再被检查到。这就导致了漏标。</p>
+<p>还有一种漏标的情况，就是新产生一个对象，这个对象被已经被标记为黑色的对象持有。比如图例中的newObjectF。因为黑色对象已经被认为是检查完毕了，所以新产生的对象不会再被检查，这也会导致漏标。这两种漏标的解决方式我将仔细讲解一下。</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%95%E6%BC%8F%E6%A0%87-1755075522465.png"
+	width="2350"
+	height="992"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%95%E6%BC%8F%E6%A0%87-1755075522465_hu_2884fc10f984742b.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%95%E6%BC%8F%E6%A0%87-1755075522465_hu_e50547798f55924e.png 1024w"
+	loading="lazy"
+	
+		alt="三色标记算法漏标"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="236"
+		data-flex-basis="568px"
+	
+></p>
+<h4 id="">
+</h4><h4 id="已经存在的对象被漏标">已经存在的对象被漏标
+</h4><p>即图例中被漏标的objectD，要向漏标objectD，必须同时满足：</p>
+<ol>
+<li>灰色对象不再指向白色对象，即objectB.d = null</li>
+<li>黑色对象指向白色对象，即objectA.d = objectD</li>
+</ol>
+<p>要解决漏标，只要打破这两个条件的任意一个即可。由此我们引出两个解决方案。原始快照和增量更新。</p>
+<ol>
+<li>原始快照(Snapshot At The Beginning，简称SATB)
+当任意的灰色对象到白色对象的引用被删除时，记录下这个被删除的引用，默认这个被删除的引用对象是存活的。这也可以理解为整个检查过程中的引用关系以检查刚开始的那一刻为准。</li>
+<li>增量更新(Incremental Update)
+当灰色对象被新增一个白色对象的引用的时候，记录下发生引用变更的黑色对象，并将它重新改变为灰色对象，重新标记。这是CMS采用的解决办法（没错，CMS也是三色标记算法实现的）。</li>
+</ol>
+<p>在上面的两种解决方案里，我们发现，无论如何，都要记录下发生更改的引用。所以我们需要一种记录引用发生更改的手段，写屏障(write barrier)。写屏障是一种记录下引用发生变更的手段，效果类似AOP，但是其实现远比我们使用的AOP更加底层，大家可以认为是在JVM代码层面的一段代码。每当任意的引用变更时，就会触发这段代码，并记录下发生变更的引用。</p>
+<h4 id="新产生的对象被漏标">新产生的对象被漏标
+</h4><p>新产生的对象被漏标的解决方式则简单一些，在增量更新模式下，这个问题天生就被解决了。在SATB模式下，我们其实是在检查一开始就确定了一个检查范围，所以我们可以将新产生的对象放在检查范围之外，默认新产生的对象时存活的。当然这个过程得实际结合卡表来讲解才会更加具体形象。接下来在Mixed GC的过程里再细说。</p>
+<h4 id="satb">SATB
+</h4><p>Snapshot At The Beginning，G1在分配对象时，会在region中有2个top-at-mark-start（TAMS）指针，分别表示prevTAMS和nextTAMS。对应着卡表上即指向表示卡表范围的的两个编号，GC时分配在nextTAMS位置以上的对象都视为活着的，这是一种隐式的标记（这涉及到G1 MixedGC垃圾回收阶段的细节，很复杂，接下来会详细讨论）。这种解决漏标的方式是有缺陷的，它会造成真正应该被回收的白对象躲过这次GC生存到下一次GC，这就是float garbage(浮动垃圾)。因为SATB的做法精度比较低，所以造成float garbage的情况也会比较多。</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/SATB%E7%AE%80%E4%BB%8B-1755072180997.png"
+	width="770"
+	height="745"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/SATB%E7%AE%80%E4%BB%8B-1755072180997_hu_a2f797b0c2359c2e.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/SATB%E7%AE%80%E4%BB%8B-1755072180997_hu_148e9d194c7a2b17.png 1024w"
+	loading="lazy"
+	
+		alt="SATB简介"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="103"
+		data-flex-basis="248px"
+	
+></p>
+<h3 id="mixed-gc">Mixed GC
+</h3><p>通过前面的学习，我们已经认识到了G1采用的标记算法-三色标记算法以及解决里面问题的解决思想，接下来我们将讲解Mixed GC的详细过程，以及怎样利用G1的卡表来解决里面的问题。</p>
+<p>Mixed GC从步骤上可以分为两个大步骤，全局并发标记（global concurrent marking），拷贝存活对象（evacuation）。全局并发表及的过程涉及到SATB的标记过程，我们将详细讲解。</p>
+<p>全局</p>
+<p>G1收集器垃圾收集器的全局并发标记（global concurrent marking）分为多个阶段</p>
+<ol>
+<li>
+<p>初始标记（initial  marking）
+这个阶段会STW，标记从GC Root开始直接可达的对象，这一步伴随着young gc。之所以要young gc是为了处理跨代引用，老年代独享也可能被年轻代跨代引用，但是老年代不能使用RSet来解决跨代饮用。还有就是young gc也会stw，在第一步young gc可以公用stw的时间，尽量减少stw时间。
+这一步还初始化了一些参数，将bottom指针赋值给prevTAMS指针，top指针赋值给nextTAMS指针，同时清空nextBitMap指针。因为之后的并发标记需要使用到这三个变量。
+这里大家可能被这些变量搞晕了，我解释一下，top，prevTAMS，nextTAMS，top都是指向卡表的指针，他们的存在是为了标识哪些对象是可以被回收的，哪些是存活的，这就是SATB机制。而nextBitMap则是记录下卡表中哪些对象是存活的一个数组，当然现在还没开始检查，nextBitMap里的记录都是空。
+<img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/init-marking-%281%29.png"
+	width="2436"
+	height="1086"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/init-marking-%281%29_hu_5eb2050dbd87f9bf.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/init-marking-%281%29_hu_7dd1aff28f93d1b2.png 1024w"
+	loading="lazy"
+	
+		alt="init marking (E:/blog/my-blog/jvm/2023-12-30 jvm垃圾回收器理论/index.assets/init marking (1).png)"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="224"
+		data-flex-basis="538px"
+	
+></p>
+</li>
+<li>
+<p>根分区扫描（root region scan）
+这个阶段在stw之后，会扫描survivor区域（survivor分区就是根分区），将所有被survivor区域对象引用的老年代对象标记。这也是上一步需要young gc的原因，处理跨代引用时需要知道哪些old区对象被S区对象引用。这个过程因为需要扫描survivor分区，所以不能发生young gc，如果扫描过程中新生代被耗尽，那么必须等待扫描结束才可以开始young gc。这一步耗时很短。</p>
+</li>
+<li>
+<p>并发标记（Concurrent Marking）
+从GC Roots开始对堆中对象进行可达性分析，找出各个region的存活对象信息，耗时较长。粗略过程是这样的，但实际这一步的过程很复杂。因为要考虑在SATB机制之下，各个指针的变化。
+假设在根分区扫描后没有引用的改变，那么一个region的分区状态和第一步init marking初始化完一致。此时如果再继续分配对象，那么对象会分配在nextTAMS之后，随着对象的分配，TOP指针会向后移动。</p>
+<p>![concurrent marking](index.assets/concurrent marking-1755072180997.png)
+因为这一步是和mutator(用户线程)并发运行的，所以从根节点扫描的时候其实是扫描的一个快照snapshot，快照位置就是prevTAMS到nextTAMS（注意快照位置是不变的，但是prevTAMS到nextTAMS之间的对象在扫描过程中会改变）。
+当region中分配新对象时，新对象都会分配在nextTAMS之后，这导致top指向的位置也往后移动，nextTAMS和top之间的对选哪个都是被认为隐式存活。
+还有这期间也有可能应该被扫描的位置prevTAMS和nextTAMS之间的位置引用发生了变化，比如白色对象被黑色对象持有了，这就是三色标记算法的缺陷，需要更改白色对象的状态。这里会将引用被更改的对象放入satb_mark_queue。satb_mark_queue是一个队列，里面记录所有被改变引用关系的白色对象。这里指的satb_mark_queue指的全局的queue。除了全局的queue，每个线程也有自己的satb mark queue，全局的queue的引用是由所有其他线程的satb mark queue合并得来的，线程的satb mark queu满了会被转移到全局satb mark queue。且并发标记阶段会定期检查全局satb mark queue的容量，超过某个容量就concurrent marker线程就会将全局satb mark que和线程satb mark que的对象都取出来全部标记上，当然也会将这些对象的子field全部压栈（marking stack）等待接下来被标记到，这个处理类似于全局dirty card quene。这里注意。</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/satb-mark-queue-1755072180997.png"
+	width="1554"
+	height="1753"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/satb-mark-queue-1755072180997_hu_655ae2bd67bc70e9.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/satb-mark-queue-1755072180997_hu_4938b1607a803e93.png 1024w"
+	loading="lazy"
+	
+		alt="satb mark queue"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="88"
+		data-flex-basis="212px"
+	
+>
+随着并发标记结束nextBitMap里也标记了那些对象是可以回收的，但注意，不一定每个线程里satb mark queue都被转移到了全局的satb mark queue，因为合并这个过程也是并发的。所以需要下一步</p>
+</li>
+<li>
+<p>最终标记（remark）
+标记那些并发标记阶段发生变化的对象，就是将线程satb mark queue中引用发生更改的对象找出来，放入satb mark queue。这个阶段为了保证标记正确必须STW。</p>
+</li>
+<li>
+<p>清点垃圾（cleanup）
+对各个region的回收价值和成本进行排序，根据用户期待的GC停顿时间指定回收计划，选中部分old region,和全部的young region，这些被选中的分区称为Collection Set（Cset），还会把没有任何对象的region加入到可用来分配对象的region集合中。注意这一步不是清除，是清点出哪些region值得回首，不会复制任何对象。清点执行完，一个全局并发标记周期基本就执行完了。这时还会将nextTAMS指针赋值给prevTAMS，且nextBitMap赋值给prevBitMap。这里是不是很奇怪为什么要记录本轮标记的结果到prevBitMap，难道下次再来检查本region时还可以在复用这个标记结果吗。
+我们知道G1是可以根据内存的变化自己调整内存中E区，O区的容量的，如果其中某些分区容量增长比较快，说明这个分区的内存访问更频繁，在未来也可能更快地达到region的容量限制，那么下次复制转移时就会优先将这块region中的对象转移到更大的region中去。</p>
+</li>
+</ol>
+<p>标记结束剩下的就是转移evacuation，拷贝存活对象。就是将活着的对象拷贝到空的region,在回收掉部分region。这一步是采用多线程复制清除，整个过程会STW。这也是G1的优势之一，只要还有一块空闲的region，就可以完成垃圾回收。而不用像CMS那样必须预留太多的内存。</p>
+<h3 id="g1点评">G1点评
+</h3><p>从G1的设计上来看，它使用了大量的额外结构来存储引用关系，并以此来减少垃圾回收中标记的耗时。但是这种额外的结构带来的内存浪费也是存在的，极端情况甚至可以额外占用20%的内存。而基于region的内存划分规则则让内存分配更加复杂，但是这也有好处。就是内存的回收后产生的碎片更少，也就更少触发full gc。</p>
+<p>根据经验，在大部分的大型内存(6G以上)服务器上，无论是吞吐量还是STW时间，G1的性能都是要优于CMS。</p>
+<h2 id="zgc">ZGC
+</h2><p>了解完G1之后，让我们再来看看大名鼎鼎的ZGC，也是目前号称&quot;全程并发，能将停顿时间控制在10ms&quot;内的低延迟垃圾回收器。ZGC全程Z Garbage Collector，这里面的Z不是什么缩写。ZGC在JDK11开始实验性的开放功能，在JDK17开始实装。在讲解ZGC的垃圾回收流程以前，让我们先介绍一下ZGC里面的技术设计，这有助于我们理解ZGC的工作过程。</p>
+<h3 id="page内存布局">Page内存布局
+</h3><p>zgc也是将堆内存划分为一系列的内存分区，称为page(深入理解JVM原书上管这种分区叫做region，但是官方文档还是叫做的page，我们这里引用官方文档的称呼以免和G1搞混)，这种管理方式和G1 GC很相似，但是ZGC的page不具备分代，准确的说应该是ZGC目前不具备分代的特点（目前JDK17版本下的ZGC还是没有分代的）。原因是如果将ZGC设计为支持分代的垃圾回收，设计太复杂，所以先将ZGC设计为无分代的GC模式，后续再迭代。ZGC的page有3种类型。</p>
+<ul>
+<li>小型page(small page)
+容量2M，存放小于256k的对象</li>
+<li>中型page(medium page)
+容量32M，存放大于等于256k，但是小于4M的page</li>
+<li>大型page(large page)
+容量不固定，但是必须是2M的整数倍。存放4M以上的对象，且只能存放一个对象。</li>
+</ul>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-page-1755072180997.png"
+	width="955"
+	height="500"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-page-1755072180997_hu_46256fbaa5618217.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-page-1755072180997_hu_60efe72bacb11fc4.png 1024w"
+	loading="lazy"
+	
+		alt="ZGC page"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="191"
+		data-flex-basis="458px"
+	
+></p>
+<h3 id="内存回收算法">内存回收算法
+</h3><p>ZGC的回收算法也遵循先找到垃圾，然后回收掉垃圾的步骤，其中最复杂的过程也是找到垃圾这个过程。要理解ZGC的并发回收过程先了解3个概念。</p>
+<h4 id="染色指针">染色指针
+</h4><p>Colored Pointer，染色指针是一种让指针存储额外信息的技术。我们知道在64位操作系统里，一个内存的地址总共64位，但是受限于实际物理内存的大小，我们其实并不是真正的使用所有64位。这里如果小伙伴了解linux的虚拟内存管理会很好理解，我这里大概解释一下。我们平时所说操作系统的&quot;物理内存地址&quot;并不是真正的&quot;物理内存地址&quot;，也就是说，并不是物理上，内存颗粒对应的地址。而是操作系统为我们虚拟的一个&quot;虚拟地址&quot;，这个技术被称为虚拟内存管理。虚拟内存基本在所有的linux服务器上都有使用，除了少部分嵌入式设备，因为内存太小不需要使用这种技术。在虚拟内存的帮助下，我们可以做到两个虚拟内存地址对应一个真实的物理地址。虚拟内存的知识不是我们的重点，大家有个映象即可。</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-%E6%9F%93%E8%89%B2%E6%8C%87%E9%92%88-1704724177075-1755072180997.png"
+	width="1306"
+	height="905"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-%E6%9F%93%E8%89%B2%E6%8C%87%E9%92%88-1704724177075-1755072180997_hu_b1d60ac78596e0e2.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-%E6%9F%93%E8%89%B2%E6%8C%87%E9%92%88-1704724177075-1755072180997_hu_8b64b6b532e7a74d.png 1024w"
+	loading="lazy"
+	
+		alt="ZGC 染色指针"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="144"
+		data-flex-basis="346px"
+	
+></p>
+<p>对于JVM来说，一个对象的地址只使用前42位，而第43-46位用来存储额外的信息，即GC对象处于ZGC那个阶段。只使用46位的客观原因是linux系统只支持46位的物理地址空间，即64T的内存，如果一定想要使用更大的内存，需要linux额外的设置。但是这个内存设置在主流的服务器上都够用了。</p>
+<p>在引用地址的划分上，对象引用第43位表示marked0标记，44位marked1标记，45位remapped标记，46位finalizable标记。指针染色就是给对应的位置为1,当然这三个位同一个时间只能有一个位生效。这些标记分别表示对象处于GC的那个阶段里。在下面ZGC的详细过程里我们会介绍染色指针怎么帮助GC的。指针的引用地址在各个标记之间切换也被称为指针的自愈。</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-%E6%9F%93%E8%89%B2%E6%8C%87%E9%92%882-1755072180997.png"
+	width="2832"
+	height="1564"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-%E6%9F%93%E8%89%B2%E6%8C%87%E9%92%882-1755072180997_hu_c69dbb778ec5947a.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-%E6%9F%93%E8%89%B2%E6%8C%87%E9%92%882-1755072180997_hu_eb152974ec9276c7.png 1024w"
+	loading="lazy"
+	
+		alt="ZGC 染色指针2"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="181"
+		data-flex-basis="434px"
+	
+></p>
+<h4 id="读屏障">读屏障
+</h4><p>read barrier，就是JVM向应用代码插入一小段代码的技术，仅当线程从堆中读取对象引用时触发。效果上类似于写屏障，不过是在对象被读取时触发。</p>
+<p>读屏障主要是用来改写每个地址的命名空间。这里还涉及到指针的自愈self healing。指针的自愈是指的当访问一个正处于重分配集中的对象时会被读屏障拦截，然后通过转发记录表forwarding table将访问转发到新复制的对象上，并且修正并更新该引用的值，使其直接指向新对象。也是因为这个能力，ZGC的STW时间大大缩短，其他的GC则需要修复所有指向本对象的指针后才能访问。这里的内容可能看不明白，没关系先放在这里后续看完ZGC的详细流程就会明白。</p>
+<h4 id="numa">NUMA
+</h4><p>numa不是ZGC在垃圾回收器上的创新，但是是ZGC的一大特点。大家了解就可以了。了解NUMA先了解UMA。</p>
+<ul>
+<li>uma(Uniform Memory Access Architeture)
+统一内存访问，也是一般电脑的正常架构，即一块内存多个CPU访问，所以在多核CPU在访问一块内存时会出现竞争。操作系统为了为了锁住某一块内存会限制总线上对某个内存的访问，当CPU变多时总线就会变成瓶颈。</li>
+<li>numa(non Uniform Memory Access Architeture)
+非统一内存访问，每块CPU都有自己的一块对应内存，一般是距离CPU比较近的，CPU会优先访问这块内存。因为CPU之间访问各自的内存这样就减少了竞争，效率更高。numa技术允许将多台机器组成一个服务供外部使用，这种技术在大型系统上比较流行，也是一种高性能解决方案，而且堆空间也可以由多台机器组成。ZGC对numa的适配就是ZGC能够自己感知numa架构。</li>
+</ul>
+<h3 id="zgc流程">ZGC流程
+</h3><p>接下来我们详细学习ZGC的流程，这里引入一个概念，good_mask。good_mask是记录JVM垃圾回收阶段的标志，随着GC进行不断切换，并且让JVM根据good_mask和对象的标记位的关系识别对象是不是本轮GC里产生的，good_mask可以说是记录当前JVM视图空间的变量。ZGC流程如下。</p>
+<ol>
+<li>
+<p>初始标记(Init Mark)
+初始标记，这一步和G1类似，也是记录下所有从GC Roots可达的对象。除此之外，还切换了good_mask的值，good_mask初始化出来是remapped，经过这次切换，就变为了marked1(这里很多人认为第一次是切换到0，其实不是的)。需要注意的是，对象的指针，因为还没有参加过GC，所以对象的标志位是出于Remapped。经过这一步，所有GC Roots可达的对象就被标记为了marked1。
+<img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-init-mark-1755072180997.png"
+	width="3857"
+	height="1760"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-init-mark-1755072180997_hu_6dccacb9ce6186a6.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-init-mark-1755072180997_hu_c6bc0ae3799a5418.png 1024w"
+	loading="lazy"
+	
+		alt="ZGC init mark"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="219"
+		data-flex-basis="525px"
+	
+></p>
+</li>
+<li>
+<p>并发标记(Concurrent Mark)
+第一执行标记时，视图为marked1，GC线程从GCRoots出发，如果对象被GC线程访问，那么对象的地址视图会被Remapped切换到marked1，在标记结束时，如果对象的地址空间是marked1，那么说明对象是活跃的，如果是Remapped，那么说明对象是不活跃的。同时还会记录下每个内页中存活的对象的字节数大小，以便后续做页面迁移。这个阶段新分配的对象的染色指针会被置为marked1。
+这个阶段还有一件事，就是修复上一次GC时被标记的指针，这也是为什么染色指针需要两个命名空间的原因。如果命名空间只有一个，那么本次标记时就区分不出来一个已经被标记过的指针是本次标记还是上次标记的。</p>
+</li>
+<li>
+<p>重新标记(Remark)
+这个阶段是处理一些并发标记阶段未处理完的任务(少量STW，控制在1ms内)如果没处理完还会再次并发标记，这里其实主要是解决三色标计算法中的漏标的问题,即白色对象被黑色对象持有的问题。并发标记阶段发生引用更改的对象会被记录下来(触发读屏障就会记录)，在这个阶段标记引用被更改的对象。这里我就不画图了，大家理解意思就行。</p>
+</li>
+<li>
+<p>并发预备重分配(Concurrent Prepare for Relocate)
+这一步主要是为了之后的迁移做准备，这一步主要是处理软引用，弱引用，虚引用对象，以及重置page的Forwarding table，收集待回收的page信息到Relocation Set
+Forwarding table是记录对象被迁移后的新旧引用的映射表。Relocation Set是存放记录需要回收的存活页集合。这个阶段ZGC会扫描所有的page，将需要迁移的page信息存储到Relocation Set，这一点和G1很不一样，G1是只选择部分需要回收的Region。在记录page信息的同时还会初始化page的Forwarding table，记录下每个page里有哪些需要迁移的对象。这一步耗时很长，因为是全量扫描所有的page，但是因为是和用户线程并发运行的，所以并不会STW，而且对比G1，还省去了维护RSet和SATB的成本。
+<img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-concurrent-prepare-for-relocate-%281%29.png"
+	width="3051"
+	height="1538"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-concurrent-prepare-for-relocate-%281%29_hu_398f04baf583b4c4.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-concurrent-prepare-for-relocate-%281%29_hu_4269fcdcacd3db8b.png 1024w"
+	loading="lazy"
+	
+		alt="ZGC concurrent prepare for relocate (E:/blog/my-blog/jvm/2023-12-30 jvm垃圾回收器理论/index.assets/ZGC concurrent prepare for relocate (1).png)"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="198"
+		data-flex-basis="476px"
+	
+></p>
+</li>
+<li>
+<p>初始迁移(Relocate Start)
+这个阶段是为了找出所有GC Roots直接可达的对象，并且切换good_mask到remapped，这一步是STW的。这里注意一个问题，被GC Roots直接引用的对象可能需要迁移。如果需要，则会将该对象复制到新的page里，并且修正GC Roots指向本对象的指针，这个过程就是&quot;指针的自愈&quot;。当然这不是重点重点是切换good_mask。
+<img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-relocate-start-1755072180997.png"
+	width="3793"
+	height="1714"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-relocate-start-1755072180997_hu_6daa9b0729bd4e84.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-relocate-start-1755072180997_hu_afeade0108125337.png 1024w"
+	loading="lazy"
+	
+		alt="ZGC relocate start"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="221"
+		data-flex-basis="531px"
+	
+></p>
+</li>
+<li>
+<p>并发迁移(Concurrent Relocate)</p>
+<p>这个阶段需要遍历所有的page，并且根据page的forward table将存活的对象复制到其他page，然后再forward table里记录对象的新老引用地址的对应关系。page中的对象被迁移完毕后，page就会被回收，注意这里并不会回收掉forward table，否则新老对象的映射关系就丢失了。
+这个阶段如果正好用户线程访问了被迁移后的对象，那么也会根据forward table修正这个对象被持有的引用，这也是&quot;指针的自愈&quot;。
+<img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-concurrent-relocate-1755072180997.png"
+	width="3758"
+	height="1981"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-concurrent-relocate-1755072180997_hu_4fad1c30979b9f1d.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-concurrent-relocate-1755072180997_hu_9186833217e0bf48.png 1024w"
+	loading="lazy"
+	
+		alt="ZGC concurrent relocate"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="189"
+		data-flex-basis="455px"
+	
+></p>
+</li>
+<li>
+<p>并发重映射(Concurrent Remap)
+这个阶段是为了修正所有的被迁移后的对象的引用。严格来说并发重映射并不属于本轮GC阶段要采取的操作。因为在第6步执行后，我们就得到了所有的需要重新映射的对象被迁移前后地址映射关系，有了这个关系，在以后的访问时刻，都可以根据这个映射关系重新修正对象的引用，即&quot;指针自愈&quot;。如果这里直接了当的再重新根据GC Roots遍历所有对象，当然可以完成所有对象的&quot;指针自愈&quot;，但是实际是额外的产生了一次遍历所有对象的操作。所以ZGC采取的办法是将这个阶段推迟到下轮ZGC的并发标记去完成，这样就公用了遍历所有对象的过程。而在下次ZGC开始之前，任何的线程访问被迁移后的对象的引用，则可以触发读屏障，并根据forward table自己识别出对象被迁移后的地址，自行完成&quot;指针自愈&quot;。<img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC%20concurrent%20remap.png"
+	width="3604"
+	height="1981"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC%20concurrent%20remap_hu_33921297c5486599.png 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC%20concurrent%20remap_hu_aeef355003388ecd.png 1024w"
+	loading="lazy"
+	
+		alt="ZGC concurrent remap"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="181"
+		data-flex-basis="436px"
+	
+></p>
+</li>
+</ol>
+<h3 id="zgc点评">ZGC点评
+</h3><p>以我的能力来点评ZGC的设计似乎有点不妥，但是我还是想结合自己的理解，评价一下ZGC的的优缺点。ZGC的优势很明显，几乎全程并发的回收过程带来了无与伦比的低暂停时间，这也是ZGC的设计思路。低暂停时间加上JAVA本身的支持高并发的特点，假以时日ZGC将来一定是能在服务器领域的展现它大杀器级别的威力。但是为了达到这个设计目标，ZGC其实也牺牲了一些东西，比如吞吐量。我知道在很多地方，比如《深入理解JVM》这本书上，都把ZGC描述成全方位碾压G1的姿态。但是并不是的，至少在JDK21之前的不分代的ZGC不是的，具体的测试，大家可以看一下一篇Oracle的文章。链接我贴在下面。</p>
+<p><a class="link" href="https://cr.openjdk.org/~pliden/slides/ZGC-OracleDevLive-2020.pdf"  target="_blank" rel="noopener"
+    >https://cr.openjdk.org/~pliden/slides/ZGC-OracleDevLive-2020.pdf</a></p>
+<p>当然这些缺点随着ZGC的成熟，以及JDK21在ZGC里加入分代的特性，都会一点点的好转。总而言之ZGC还是设计非常优秀的一款垃圾回收器。大家要好好学，尤其是现在ZGC还不是特别流行时，面试时多吹一吹，立马就能唬住一般的面试官。</p>
+<hr>
+<h1 id="end">END
+</h1><p>JVM垃圾回收器的知识实在太多了，写起来非常费劲，关于GC日志相关的知识我就放到下一章节再讲了，下一章应该还有一点点JVM垃圾回收器的收尾知识。</p>
+<p>大家多点赞啊。</p>
+
+</section>
+
+
+    <footer class="article-footer">
+    
+    <section class="article-tags">
+        
+            <a href="/tags/jvm/">Jvm</a>
+        
+            <a href="/tags/%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8/">垃圾回收器</a>
+        
+            <a href="/tags/zgc/">ZGC</a>
+        
+            <a href="/tags/g1/">G1</a>
+        
+    </section>
+
+
+    
+    <section class="article-copyright">
+        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-copyright" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <path d="M14.5 9a3.5 4 0 1 0 0 6" />
+</svg>
+
+
+
+        <span>Licensed under CC BY-NC-SA 4.0</span>
+    </section>
+    </footer>
+
+
+    
+</article>
+
+    
+
+    
+
+<aside class="related-content--wrapper">
+    <h2 class="section-title">相关文章</h2>
+    <div class="related-content">
+        <div class="flex article-list--tile">
+            
+                
+<article class="has-image">
+    <a href="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/">
+        
+        
+            <div class="article-image">
+                <img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/cover.d90fa26e1736e1e5528c871b12e50b42_hu_e5afb3c60a0897e9.jpg" 
+                        width="250" 
+                        height="150" 
+                        loading="lazy"
+                        alt="Featured image of post jvm垃圾回收器前篇"
+                        
+                        data-hash="md5-2Q&#43;ibhc24eVSjIcbEuULQg==">
+                
+            </div>
+        
+
+        <div class="article-details">
+            <h2 class="article-title">jvm垃圾回收器前篇</h2>
+        </div>
+    </a>
+</article>
+
+            
+                
+<article class="has-image">
+    <a href="/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/">
+        
+        
+            <div class="article-image">
+                <img src="/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/cover.530be746e65198b8ef399109580687aa_hu_7f40994807886298.jpg" 
+                        width="250" 
+                        height="150" 
+                        loading="lazy"
+                        alt="Featured image of post jvm类加载器"
+                        
+                        data-hash="md5-UwvnRuZRmLjvOZEJWAaHqg==">
+                
+            </div>
+        
+
+        <div class="article-details">
+            <h2 class="article-title">jvm类加载器</h2>
+        </div>
+    </a>
+</article>
+
+            
+                
+<article class="has-image">
+    <a href="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%AF%B9%E8%B1%A1%E5%88%86%E9%85%8D%E8%A7%84%E5%88%99/">
+        
+        
+            <div class="article-image">
+                <img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%AF%B9%E8%B1%A1%E5%88%86%E9%85%8D%E8%A7%84%E5%88%99/index.assets/cover.386e079aa54a6fb6d29a54fd4b0be56f_hu_244f1489af6b6215.jpg" 
+                        width="250" 
+                        height="150" 
+                        loading="lazy"
+                        alt="Featured image of post jvm垃圾回收器对象分配规则"
+                        
+                        data-hash="md5-OG4HmqVKb7bSmlT9Swvlbw==">
+                
+            </div>
+        
+
+        <div class="article-details">
+            <h2 class="article-title">jvm垃圾回收器对象分配规则</h2>
+        </div>
+    </a>
+</article>
+
+            
+        </div>
+    </div>
+</aside>
+
+     
+    
+        
+    <div class="disqus-container">
+    <div id="disqus_thread"></div>
+<script>
+    window.disqus_config = function () {
+    
+    
+    
+    };
+    (function() {
+        if (["localhost", "127.0.0.1"].indexOf(window.location.hostname) != -1) {
+            document.getElementById('disqus_thread').innerHTML = 'Disqus comments not available by default when the website is previewed locally.';
+            return;
+        }
+        var d = document, s = d.createElement('script'); s.async = true;
+        s.src = '//' + "hugo-theme-stack" + '.disqus.com/embed.js';
+        s.setAttribute('data-timestamp', +new Date());
+        (d.head || d.body).appendChild(s);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+<a href="https://disqus.com" class="dsq-brlink">comments powered by <span class="logo-disqus">Disqus</span></a>
+</div>
+
+<style>
+    .disqus-container {
+        background-color: var(--card-background);
+        border-radius: var(--card-border-radius);
+        box-shadow: var(--shadow-l1);
+        padding: var(--card-padding);
+    }
+</style>
+
+<script>
+    window.addEventListener('onColorSchemeChange', (e) => {
+        if (typeof DISQUS == 'object') {
+            DISQUS.reset({
+                reload: true
+            });
+        }
+    })
+</script>
+
+    
+
+    <footer class="site-footer">
+    <section class="copyright">
+        &copy; 
+        
+        2025 javashitu
+    </section>
+    
+    <section class="powerby">
+        使用 <a href="https://gohugo.io/" target="_blank" rel="noopener">Hugo</a> 构建 <br />
+        主题 <b><a href="https://github.com/CaiJimmy/hugo-theme-stack" target="_blank" rel="noopener" data-version="3.30.0">Stack</a></b> 由 <a href="https://jimmycai.com" target="_blank" rel="noopener">Jimmy</a> 设计
+    </section>
+</footer>
+
+
+    
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+    
+    <div class="pswp__bg"></div>
+
+    
+    <div class="pswp__scroll-wrap">
+
+        
+        <div class="pswp__container">
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+        </div>
+
+        
+        <div class="pswp__ui pswp__ui--hidden">
+
+            <div class="pswp__top-bar">
+
+                
+
+                <div class="pswp__counter"></div>
+
+                <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+
+                <button class="pswp__button pswp__button--share" title="Share"></button>
+
+                <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+
+                <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+
+                
+                
+                <div class="pswp__preloader">
+                    <div class="pswp__preloader__icn">
+                        <div class="pswp__preloader__cut">
+                            <div class="pswp__preloader__donut"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+                <div class="pswp__share-tooltip"></div>
+            </div>
+
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+            </button>
+
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+            </button>
+
+            <div class="pswp__caption">
+                <div class="pswp__caption__center"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div><script 
+                src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"integrity="sha256-ePwmChbbvXbsO02lbM3HoHbSHTHFAeChekF1xKJdleo="crossorigin="anonymous"
+                defer
+                >
+            </script><script 
+                src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"integrity="sha256-UKkzOn/w1mBxRmLLGrSeyB4e1xbrp4xylgAWb3M42pU="crossorigin="anonymous"
+                defer
+                >
+            </script><link 
+                rel="stylesheet" 
+                href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"crossorigin="anonymous"
+            ><link 
+                rel="stylesheet" 
+                href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"crossorigin="anonymous"
+            >
+
+            </main>
+        </div>
+        <script 
+                src="https://cdn.jsdelivr.net/npm/node-vibrant@3.1.6/dist/vibrant.min.js"integrity="sha256-awcR2jno4kI5X0zL8ex0vi2z&#43;KMkF24hUW8WePSA9HM="crossorigin="anonymous"
+                
+                >
+            </script><script type="text/javascript" src="/ts/main.3a1a8966cafbfc78457f276ea131a0bdd7155858067cf76100572a15ddfcb82a.js" defer></script>
+<script>
+    (function () {
+        const customFont = document.createElement('link');
+        customFont.href = "https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap";
+
+        customFont.type = "text/css";
+        customFont.rel = "stylesheet";
+
+        document.head.appendChild(customFont);
+    }());
+</script>
+
+    </body>
+</html>

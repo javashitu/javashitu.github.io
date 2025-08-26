@@ -1,0 +1,2513 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+    <channel>
+        <title>Posts on javashitu</title>
+        <link>http://localhost:1313/post/</link>
+        <description>Recent content in Posts on javashitu</description>
+        <generator>Hugo -- gohugo.io</generator>
+        <language>zh-cn</language>
+        <copyright>javashitu</copyright>
+        <lastBuildDate>Thu, 28 Nov 2024 00:00:00 +0000</lastBuildDate><atom:link href="http://localhost:1313/post/index.xml" rel="self" type="application/rss+xml" /><item>
+        <title>kafka数据在服务端是如何写入的</title>
+        <link>http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/</link>
+        <pubDate>Thu, 28 Nov 2024 00:00:00 +0000</pubDate>
+        
+        <guid>http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/</guid>
+        <description>&lt;img src="http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/cover.jpg" alt="Featured image of post kafka数据在服务端是如何写入的" /&gt;&lt;h1 id=&#34;学习背景&#34;&gt;学习背景
+&lt;/h1&gt;&lt;p&gt;接着上篇，我们来聊聊kafka数据在服务端怎么写入的&lt;/p&gt;
+&lt;h1 id=&#34;服务端写入&#34;&gt;服务端写入
+&lt;/h1&gt;&lt;p&gt;在介绍服务端的写流程之前，我们先要理解服务端的几个角色之间的关系。&lt;/p&gt;
+&lt;p&gt;假设我们有一个由3个broker组成的kafka集群，我们在这个集群上创建一个topic叫做shitu-topic，他有10个分区，每个分区有3个副本。那么partition和broker的关系假设如下。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/kafka-partition%E5%85%B3%E7%B3%BB.jpg&#34;
+	width=&#34;2216&#34;
+	height=&#34;954&#34;
+	srcset=&#34;http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/kafka-partition%E5%85%B3%E7%B3%BB_hu_482b16b46cbbd22e.jpg 480w, http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/kafka-partition%E5%85%B3%E7%B3%BB_hu_2d395a6ec032a5ab.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;kafka-partition关系&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;232&#34;
+		data-flex-basis=&#34;557px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;因为每个partition有3个副本，所以每个partition的副本都会均匀的分布在这三台机器上，我们取shitu-topic-0的副本来观察。&lt;/p&gt;
+&lt;p&gt;在三个broker上，每个broker的log存储目录都有一个shitu-topic-0目录，我们可以成为shitu-topic-0分区，但是同一个时间，只有broker-0上的leader副本对外提供服务，broker-1和broker-2需要去到broker-0上同步消息。在shitu-topic-0目录下就是存储的实际的日志文件。日志文件里包含三个主要的文件内容.log文件存储实际的消息,.index文件存储索引,.timeindex文件存储时间索引。我们把这三个文件合称为一个logsegment日志段，每个log文件只要超过1G就会产生一个新的段文件。日志段文件的命名是以当前段内第一条消息的offset来命名的，这里因为是新创建的topic，第一条消息是0，所以都是0。因为消息是顺序写入的，所以只有最后一个日志段是激活的我们称为active segemnt，活跃段。比如这里活跃段就是00000000000020123000开头的段。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/kafka-leader-flower%E5%85%B3%E7%B3%BB.jpg&#34;
+	width=&#34;2728&#34;
+	height=&#34;1356&#34;
+	srcset=&#34;http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/kafka-leader-flower%E5%85%B3%E7%B3%BB_hu_298fecb5c2c4f897.jpg 480w, http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/kafka-leader-flower%E5%85%B3%E7%B3%BB_hu_2d367567c9856fd4.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;kafka leader-flower关系&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;201&#34;
+		data-flex-basis=&#34;482px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;研究消息的写入，就是研究这些文件时怎么产生的，让我们来看一下段文件里每个文件的组织格式。&lt;/p&gt;
+&lt;h2 id=&#34;写入文件&#34;&gt;写入文件
+&lt;/h2&gt;&lt;h3 id=&#34;log文件&#34;&gt;log文件
+&lt;/h3&gt;&lt;p&gt;.log文件存储实际的写入日志，也就是实际的数据存储位置。kafka的log文件存储格式经过了3次变化，目前使用的日志格式称为V2版本，我们取这个版本的日志格式来做讲解。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/log%E6%96%87%E4%BB%B6%E6%A0%BC%E5%BC%8F.jpg&#34;
+	width=&#34;4196&#34;
+	height=&#34;1555&#34;
+	srcset=&#34;http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/log%E6%96%87%E4%BB%B6%E6%A0%BC%E5%BC%8F_hu_287a8d0cb76e26b9.jpg 480w, http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/log%E6%96%87%E4%BB%B6%E6%A0%BC%E5%BC%8F_hu_672aa08e9e9f8128.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;log文件格式&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;269&#34;
+		data-flex-basis=&#34;647px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;上图左侧显示的是log文件的格式，我们把log文件内存储的的消息集合称为record batch,而每条消息我们称为一条record，每条record的格式如右边所示。record batch内的字段主要记录的整个log文件的全局属性，比如log文件的起始偏移量，文件长度，epoch，时间戳等等，不做详细解释，也不是重点。&lt;/p&gt;
+&lt;p&gt;我们说一下每条消息的格式，我们知道每条消息除了实际的消息内容value外，伴随着每条消息的产生，还会产生这条消息的额外附带的信息，比如消息的偏移量，offsset，时间戳timestamp等等。kafka在设计消息的存储时花了很大的心思。&lt;/p&gt;
+&lt;p&gt;这里我解释一下varint，varlong类型，简单的说，就是可变长的类型。比如一条消息的偏移量是int存储容量是4字节，比如存储10这个偏移量，虽然前面大部分是0，但是实际存储还是需要4字节。而varint则可以根据数据的范围选择合适的存储，比如还是10，那么实际记录这个值1个字节就够了。这样，当写入消息时，比如写入2条消息，偏移量分别是10和11，如果分别存储这两个偏移量，需要&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;div class=&#34;chroma&#34;&gt;
+&lt;table class=&#34;lntable&#34;&gt;&lt;tr&gt;&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code&gt;&lt;span class=&#34;lnt&#34;&gt;1
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-fallback&#34; data-lang=&#34;fallback&#34;&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;2 * 4B = 8b
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;而如果使用varint存储，则只需要&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;div class=&#34;chroma&#34;&gt;
+&lt;table class=&#34;lntable&#34;&gt;&lt;tr&gt;&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code&gt;&lt;span class=&#34;lnt&#34;&gt;1
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-fallback&#34; data-lang=&#34;fallback&#34;&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;2 * 1B + 4B(基础偏移量) = 6B
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;这里如果不是2条消息，而是10000条消息，那么这个优化就会非常有用。kafka这么做是为了尽最大的可能使用存储空间。当然除了数据格式上的优化，kafka还对数据进行了压缩，也就是records是可以配置不同的压缩算法进行压缩的，比如ZIP。&lt;/p&gt;
+&lt;h3 id=&#34;index文件&#34;&gt;index文件
+&lt;/h3&gt;&lt;p&gt;.index记录偏移量到实际消息的映射关系。一个很简单的述求，我们想知道某个偏移量的日志的内容，那么我们就需要一种能根据偏移量定位到消息的格式。&lt;/p&gt;
+&lt;p&gt;index文件的格式由相对偏移量realtive offset和物理偏移量position组成。当一条消息写入时，根据消息的偏移量计算出这条消息的相对偏移量，比如写入的是20123025这条消息，那么用20123025-20123000 = 25得到相对偏移量25，再记录下这消息的起始物理地址1024，即可组成对这条消息的索引。需要·注意的是，这里的索引是稀疏索引，也就是不是每条消息都会产生索引，而是每隔一些消息产生索引，这样能减少索引的文件大小。&lt;/p&gt;
+&lt;p&gt;每一条索引的需要4B的相对偏偏移量和4B的物理地址偏移量，一共8B，kafka的服务端在设置index文件最大大小时要求index文件必须是索引项的整数倍，如果不是，则会自动转换成最接近的整数倍的数字。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/index%E6%96%87%E4%BB%B6.jpg&#34;
+	width=&#34;2662&#34;
+	height=&#34;1044&#34;
+	srcset=&#34;http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/index%E6%96%87%E4%BB%B6_hu_495b7374040ed645.jpg 480w, http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/index%E6%96%87%E4%BB%B6_hu_b87ce4338848f9a1.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;index文件&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;254&#34;
+		data-flex-basis=&#34;611px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;大家这里肯定很好奇那么怎么利用相对偏移量来查找消息，我们解释一下，其实对消息的查找可以概述为根据二分法查找。比如想要查找20123050这条偏移量的消息，先根据这个偏移量，去到我们当前副本的segement集合中根据segement的起始偏移量找到对应的segement，所有的segement的信息是根据相对偏移量以跳表的形式记录的。找到的对应的segement后先计算出相对偏移量20123050-20123000 = 50,然后根据50这个相对偏移量，我们去到相对偏量数组里，使用二分查找找到[20,75]这个相对偏移量范围，那么我们可以在log文件里从1024字节开始，逐条消息的解析，并计算出消息的偏移量是不是50，直到2147字节这个结束的位置为止。如果能找到，说明消息在本partition内，不能我们再换另外的partition查找。&lt;/p&gt;
+&lt;h3 id=&#34;timeindex文件&#34;&gt;timeindex文件
+&lt;/h3&gt;&lt;p&gt;timeidnex记录时间戳到实际消息的映射关系，我们介绍了index文件的格式，再来理解timeindex文件的格式就容易多了。timeindex文件和index文件的格式类似，由时间戳相对偏移量和消息相对偏移量组成。时间戳相对偏移量根据消息的写入时间来计算，比如写入时间是1733001000，用这个写入的时间减去timeindex文件的起始时间1733000000得到1000这个相对时间戳偏移量。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/timeindex%E6%96%87%E4%BB%B6.jpg&#34;
+	width=&#34;3010&#34;
+	height=&#34;1044&#34;
+	srcset=&#34;http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/timeindex%E6%96%87%E4%BB%B6_hu_c7f0cdfc5bfdf14f.jpg 480w, http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/timeindex%E6%96%87%E4%BB%B6_hu_67cb9bcacf736f63.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;timeindex文件&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;288&#34;
+		data-flex-basis=&#34;691px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;timeindex文件的查找我们就不说了，大家可以参考index文件。需要注意一点timeindex文件的时间戳是可以设置的，虽然一般kafka服务端会采取自动设置消息写入时间的配置，即log.message.timestamp.type=LogAppendTime，这种情况下因为时间戳由服务器端设置，能够保证时间戳递增。但是如果服务端设置的是CreateTime，并且producer自己设置了消息的生产时间，那么有可能造成timeIndex的写入失败，因为timeindex要求写入的时间必须是递增的。如果不递增，则拒绝本次写入。还有就是，timeindex文件和index文件虽然都是索引，但是他们并不是每条索引项一一对应的，大家从图中也能看出来。&lt;/p&gt;
+&lt;p&gt;根据timeindex查找对应消息的过程也和index文件的查找类似，不过因为timeindex本身是根据时间戳来查找，所以会有一步先查找每个timeindex文件的最大时间戳，直到找到一个大于查找时间并且最接近查找时间的timeindex文件。这里有点绕，举个例子，第一个timeindex文件的最大时间戳10000，第二个timeindex文件最大时间戳23000,第三个timeindex文件最大时间戳50000，要查找时间戳为15000的消息，那么因为timeindex文件的时间戳是顺序递增的，很明显，第三个文件的消息都是在15000之后产生的，第一个文件的消息都是在15000之前产生的，那么理所应当的，正好拥有大于15000的时间戳23000的第二个文件理论上应该包含15000这个时间戳写入的消息，所以找到第二个文件。找到对应的文件后再去到到对应的这个timeindex文件根据时间偏移量索引找到这个对应的消息(找不到就换partition)。&lt;/p&gt;
+&lt;h2 id=&#34;写入过程&#34;&gt;写入过程
+&lt;/h2&gt;&lt;p&gt;介绍完毕实际的文件内容，我们再来归纳一下数据的写入过程。这里不会介绍副本之间的同步的问题，只介绍在leader副本上数据的写入。&lt;/p&gt;
+&lt;p&gt;当消息通过client发送到broker上时，broker根据消息的topic找到这个topic的leadder副本。leadter副本根据消息的信息计算出消息归属的parititon。找到parititon后根据偏移量设置计算出消息的偏移量和时间戳，再找到对应的active segement，在index文件中追加消息，并根据需要决定是否写入index文件和timeindex文件。&lt;/p&gt;
+</description>
+        </item>
+        <item>
+        <title>kafka是如何写入消息的</title>
+        <link>http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/</link>
+        <pubDate>Sun, 01 Sep 2024 00:00:00 +0000</pubDate>
+        
+        <guid>http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/</guid>
+        <description>&lt;img src="http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/cover.jpg" alt="Featured image of post kafka是如何写入消息的" /&gt;&lt;h1 id=&#34;学习背景&#34;&gt;学习背景
+&lt;/h1&gt;&lt;p&gt;今天我们来学习一下KAFKA的消息如何发送的。kafka消息的发送可以分为从客户端写入和服务端写入两部分，今天先将第一部分，客户端怎么写入的。&lt;/p&gt;
+&lt;h1 id=&#34;kafka基本概念&#34;&gt;KAFKA基本概念
+&lt;/h1&gt;&lt;p&gt;在正式开始介绍kafka之前，先了解一下kafka内的基本概念，这些基本概念是接下来讲解发送流程的基础。&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;broker kafka实例：每台机器上可以部署一个或者多个kafka实例，一般一台机器一个，我们可以认为一个kafka实例代表一台实际的对外提供服务的kafka物理机。kafka集群内实例用编号区分。例如broker-0，broker-1&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;topic 主题：每条消息的归属依据。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;partition 分区： 每个主题有多个partitioon，partition可以认为是对主题下消息的二次分类，不同分区之间的数据是不重复的。分区在物理存储上的表现形式就是一个个的文件夹。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;replication 副本: 副本是分区的实际实现，每个分区都有多个副本，但是只有一个服务对外提供服务，我们称为leader副本，其他副本称为flower。副本的作用是用来做备份，做leader挂掉时follower之间选举出新的leader，follower和leader绝不在同一个broker上。副本的概念理解起来很复杂，这里大家可能听得云里雾里的，没关系副本机制可以说是kafka的核心。先放着，一会讲完flower之间选举机制就明白了。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;producer 生产者:  向topic写入消息的程序。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;message:  生产者实际发送的消息主体。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;consumer 消费者：向topic订阅并消费消息的程序。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;consumer group: 消费者组，划分consumer的依据，同一个组内的消费者能够消费同一个topic中的数据。&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h1 id=&#34;消息发送流程&#34;&gt;消息发送流程
+&lt;/h1&gt;&lt;h2 id=&#34;客户端发送&#34;&gt;客户端发送
+&lt;/h2&gt;&lt;p&gt;让我们从一个例子来开始，一个简单的发送消息的例子。这里我定义了一个producer，并且自己实现了拦截器，序列化器，分区器。可能大家看到之类很陌生，因为一般不需要自定义这些组件，统统用默认的就可以了。这里我自定义这些组件仅仅为了做讲解。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901133629506.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1389&#34;
+	srcset=&#34;http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901133629506_hu_cc04b2dea975025.jpg 480w, http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901133629506_hu_20f9ed4e395982ee.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240901133629506&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;184&#34;
+		data-flex-basis=&#34;442px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;从kafka的组件设计来讲，消息使用producer.send发送(当然还有异步发送，但是这不是重点)后，会顺序的经过拦截器，序列化器，分区器。三个组件的作用分别讲解一下。&lt;/p&gt;
+&lt;p&gt;消息最先抵达的是拦截器，拦截器的存在是为了在消息被发送之前做一些统一的修改或者统计，比如打印日志，统计每个topci发送的消息等等。从拦截器最后的返回结果我们可以看出来，这一步其实可以修改很多东西，甚至是消息发送的topic，partition都是可以更改的。当然一般不会有人这么干，因为这相当于篡改了原始消息内容。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901134602620.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1389&#34;
+	srcset=&#34;http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901134602620_hu_1605381b027b5c41.jpg 480w, http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901134602620_hu_933b8364a6d7b60d.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240901134602620&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;184&#34;
+		data-flex-basis=&#34;442px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;拦截器之后经过的是序列化器，序列化器的目的是为了将消息序列化为字节数组，这里我自定义了一个和简单的序列化方式，直接序列化为JSON字符串再转换为字符数组。当然如果我们直接写入JSON格式字符串，那么使用默认的字符序列化器也是可以的。而且大部分情况下，我们应该尽量直接发送字符串，这样不至于每次变更消息格式都需要再改一遍序列化器的代码。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901134732441.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1389&#34;
+	srcset=&#34;http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901134732441_hu_de93b52962b81b11.jpg 480w, http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901134732441_hu_90b5b10b087b2050.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240901134732441&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;184&#34;
+		data-flex-basis=&#34;442px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;消息被序列化之后就到了分区器，分区器的作用只有一个，选择消息最重要发往那个分区。分区器一般也是不需要手动定义的，使用kafka默认的分区器就可以。当然，我们还可以在发送消息的位置，指定一个消息的分区，这样就会被发往我们想要发送的分区。或者我们指定一个消息的key，kafka则会根据key计算出一个hash值然后使用这个分区。这个特性非常有用，我们可以利用这个特点将很多相同&amp;quot;分类&amp;quot;的消息发送到同一个分区，比如消息里有个字段叫做orderId，那么我们根据orderId作为分区的key，就可以保证同一个订单的消息被发往同一个分区，这样如果订单的生命周期发生变化，那么生命周期变化的消息会被顺序的写入到分区内(这种场景高并发多线程写入其实还是会有问题，需要考虑状态机的流转和回退问题，但是可以通过拉长生命周期来避免)。如果不指定分区，也不指定消息key，kafka则会在各个分区之间轮训的写入消息。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901135047759.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1389&#34;
+	srcset=&#34;http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901135047759_hu_f852f0f5894acfb6.jpg 480w, http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/image-20240901135047759_hu_a39c6a10a2e65b1a.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240901135047759&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;184&#34;
+		data-flex-basis=&#34;442px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;到这里大家是不是以为就完了，这就算消息发送完毕了？当然不是，我们好药探究kafka在消息发送过程里到底做了那些事情。先看一幅图。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/kafka%E5%8F%91%E9%80%81%E6%B6%88%E6%81%AF%E6%9E%B6%E6%9E%84.jpg&#34;
+	width=&#34;5281&#34;
+	height=&#34;1255&#34;
+	srcset=&#34;http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/kafka%E5%8F%91%E9%80%81%E6%B6%88%E6%81%AF%E6%9E%B6%E6%9E%84_hu_b003f164c2698375.jpg 480w, http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/kafka%E5%8F%91%E9%80%81%E6%B6%88%E6%81%AF%E6%9E%B6%E6%9E%84_hu_125404bc493b3f7b.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;kafka发送消息架构&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;420&#34;
+		data-flex-basis=&#34;1009px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;实际上，在创建的kafka producer内，有2个线程，一个是主线程，也就是我们执行send方法的线程，一个是sender线程。我们来看看这两个线程分别做了什么。&lt;/p&gt;
+&lt;p&gt;消息在经过分区器确定要发往那个分区之后，会被写入到record accumulator(消息累加器)，并且会将若干条消息合并为一个record batch，每个record batch的大小由参数batch.size指定，默认16K。将多条消息合并是为了减少发送消息的次数，这样原本需要多次发送的消息只需要一次发送即可，当然这里还没实际执行发送的。每个record batch其实是放在一个双向队列Deque里的，消息在被发到消息收集器record accumulator后会找到自己所属的分区对应的deque，并判断需要将消息加入到队尾的record batch还是新建一个record batch。这里有个问题，如果消息超过了record batch的大小会怎么样？其实会按照消息大小来新建一个record batch，不过这个新建的record batch使用完毕就被回收了。而一般的record batch则会被复用。&lt;/p&gt;
+&lt;p&gt;消息是数据，需要实际的发送给物理节点broker，所以record accumulator里的record batch其实会被sender线程封装为request执行实际的发送。那么每个producer是怎么知道每个partition是实际的对应的那个物理节点呢，其实每个producer在启动时都会选择一个Node来查询整个集群的元数据(集群leader,flower,borker地址等信息)，这里选择的Node是producer感知到的负载最小的Node，比如途中分区2对应的Node2，它的被发送的Request只有1个，客户端感知到Node2的负载是最小的，所以会向Node2去查询元数据。sender根据每个partition对应的broker信息后，将消息累加器里partition: record batch的映射关系转换为node: request的对应关系，并将数据实际的发送到对应的node里。为了提高发送速度，kafka并不会要求每个request都响应后才允许发送下下一个request，而是允许同时发送若干个request，通过参数max.in.flight.request.per.connection配置，默认是5(在某些顺序要求比较严格的场景下，这个值都是配成1的，比如mysql binlog)。到达这个值，则会阻塞向本Node发送的消息，直到收到Response，再清理对应的record accumulator里的record batch。&lt;/p&gt;
+&lt;p&gt;以上就是消息发送时，客户端做的事情，其实我们在消息发送时还可以设置很多参数，在这个流程里没有讲解，这里我列举一下&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;acks
+控制消息在发送到leader毕后需要多少flower回复，0不等待任何回复，1只需要一个flower确认，-1必须所有flower确认。一般在消息可靠性保障等级比较高的场景下回设置为-1。&lt;/li&gt;
+&lt;li&gt;compression.type
+producer可以在消息发送之前使用压缩的方式将消息大小减少，更加能增加吞吐量，但是因为在客户端进行压缩，服务端解压缩又额外增加了延迟。默认none不执行压缩。&lt;/li&gt;
+&lt;li&gt;retries
+控制消息发送失败后的重试次数，默认0，不进行任何重试。&lt;/li&gt;
+&lt;li&gt;linger.ms
+每个record batch被发送出去时需要等待的时间，默认0，表示有可以发送的request窗口时立刻发送。&lt;/li&gt;
+&lt;li&gt;request.timeout.ms
+请求超时时间。默认3000ms&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h1 id=&#34;end&#34;&gt;END
+&lt;/h1&gt;</description>
+        </item>
+        <item>
+        <title>jvm类加载器</title>
+        <link>http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/</link>
+        <pubDate>Thu, 04 Apr 2024 00:00:00 +0000</pubDate>
+        
+        <guid>http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/</guid>
+        <description>&lt;img src="http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/cover.jpg" alt="Featured image of post jvm类加载器" /&gt;&lt;h1 id=&#34;学习背景&#34;&gt;学习背景
+&lt;/h1&gt;&lt;p&gt;关于垃圾回收器的知识我们讲完了，今天开始我们讲一个JVM里也很重要的概念，类加载器。类加载器可以说是JVM的入口也不为过，而且是面试里非常高频的问点，可以和垃圾回收器并列。几乎是把把问的程度，大家要好好看好好学。&lt;/p&gt;
+&lt;h2 id=&#34;类加载步骤&#34;&gt;类加载步骤
+&lt;/h2&gt;&lt;p&gt;我们可以从类的加载步骤来考察类加载器的功能，类从进入JVM内存开始到卸载，生命周期总共经过5步&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;loading(加载) 这一步需要做的是通过类的全限定名称获取类的二进制流，将字节流所代表的静态存储结构转换为方法区的运行时数据结构，在方法区中生成这个类的class对象，作为方法区中这个类的各种数据的访问入口。也正是因为这一步没有规定读取二进制流的来源是什么，因此诞生了很多后续的技术，比如从压缩包中读取，就变成了JAR,WAR,EAR等格式，从网络中读取就发展成了Applet(运行在浏览器中的java程序，已经被淘汰)，还有JSP,和一些中间件服务器。最有生命力的则是动态代理技术。 而且，也只有这个阶段用户可以自定义一些操作来参与到类的加载过程，后面的过程全是虚拟机主导的。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;linking(链接),链接这一步包含3个步骤&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;Verfication(验证) 验证是为了保证class文件安全，不会产生危害JVM的安全，存粹的java语言是不会产生不安全的操作的，比如访问数组边界外的数据，跳转到不存在的代码。但是JVM没有要求class文件的产生途径，我们甚至可以用16进制文本编辑器来编写java文件。所以验证时很重要的，具体的验证规则和验证的时机是直到JDK1.7的JAVA虚拟机规范才具体起来的。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Preparation(准备) 这个阶段会正式为类变量分配内存并且设定初始值，需要注意的是这里只分配了类变量(static修饰的)，实例变量是没有分配的(实例变量会在初始化时一起分配在堆中)。还有就是类变量一开始会被分配为默认值，实际赋值是在编译后的&lt;clinit&gt;(这个方法是类的构造方法，收集类的信息，比静态变量值)方法中。比如&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;static int num = 123;&lt;/p&gt;&lt;/blockquote&gt;
+&lt;p&gt;那么在准备阶段会被分配为0，在初始化时才会被分配为123。但也有特殊，常量(static final)则会直接被初始化为指定的值。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Resolution(解析) 解析是将常量池中的符号引用替换为直接引用的过程。符号引用是一组描述被引用目标的符号，可以是任何形式的字面量，引用的目标不一定要存在于内存中。直接引用则是指针，相对偏移量或者句柄，直接引用一般是和虚拟机内存布局相关的。&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ul&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Initialization(初始化) 初始化是类加载过程的最后一步，到了初始化阶段，就是实际执行程序员编写的代码的步骤。初始化阶段主要是执行&lt;clinit&gt;方法。JVM会保证父类的&lt;clinit&gt;方法优先于子类执行，而且多线程环境下也会保证线程安全，当多个线程初始化一个类时，则会只有一个线程去执行&lt;clinit&gt;方法，这意味着当静态代码块中有比较耗时的操作时，在多线程初始化时有可能造成阻塞。 clinit是将所有的类变量(静态变量)和静态语句(static代码块)的代码合并收集来的。收集的顺序是按照代码顺序，需要注意的是静态代码块的只能访问定义在它之前的静态变量，定义在它之后的变量可以赋值，但是不能访问。再额外说一下，类变量必须有赋值才会被收集为clinit方法，如果只是声明了类变量,比如static int a;那么这个类其实不会生成clinit方法，常量也不会被收集到clinit方法。&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404150930595.jpg&#34;
+	width=&#34;3100&#34;
+	height=&#34;1584&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404150930595_hu_1310040038964690.jpg 480w, http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404150930595_hu_ea19d59572b0a328.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404150930595&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;195&#34;
+		data-flex-basis=&#34;469px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;ol start=&#34;4&#34;&gt;
+&lt;li&gt;
+&lt;p&gt;Using(使用)&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;Unloading(卸载)&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/%E7%B1%BB%E5%8A%A0%E8%BD%BD%E6%AD%A5%E9%AA%A4.jpg&#34;
+	width=&#34;1379&#34;
+	height=&#34;620&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/%E7%B1%BB%E5%8A%A0%E8%BD%BD%E6%AD%A5%E9%AA%A4_hu_8ac7e0733e8cd65e.jpg 480w, http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/%E7%B1%BB%E5%8A%A0%E8%BD%BD%E6%AD%A5%E9%AA%A4_hu_a16d5030f40571f7.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;类加载步骤&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;222&#34;
+		data-flex-basis=&#34;533px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;一般的加载顺序是按照这五步进行的。需要注意的是，为了支持JAVA语言的运行时绑定，解析的 步骤有可能在初始化之后，这种操作一般被称为动态绑定或者晚绑定。而且，加载类的时机JVM也没规定，但是规定了初始化必须在加载之后，即加载，验证，准备必须在初始化之前。而且严格规定了初始化的执行时机，总共6种，且只有这六种。其他的时机JVM可以自己定义。&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;读取到new指令，访问静态final字段时&lt;/li&gt;
+&lt;li&gt;使用refect包对类进行反射时，如果类没有初始化一定要先初始化&lt;/li&gt;
+&lt;li&gt;初始化一个类时，如果父类没有初始化先初始化父类(这条规则对接口无效，接口则是允许不初始化父接口，只有使用到父接口时才初始化)&lt;/li&gt;
+&lt;li&gt;JVM启动时必须指定主类，这个主类必须最先初始化&lt;/li&gt;
+&lt;li&gt;JDK1.7下的Invoke.MethodHandler解析出的类没有经过初始化必须先初始化&lt;/li&gt;
+&lt;li&gt;JDK1.8以后得接口里使用了default方法时，如果这个接口的实现类发生了变化，那么该接口要在类被初始化之前初始化&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;举一个简单的例子&lt;/p&gt;
+&lt;p&gt;父类&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404150957280.jpg&#34;
+	width=&#34;3106&#34;
+	height=&#34;1456&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404150957280_hu_28ff1ff27250df4c.jpg 480w, http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404150957280_hu_89d8aa519ec8321e.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404150957280&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;213&#34;
+		data-flex-basis=&#34;511px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;子类&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151015366.jpg&#34;
+	width=&#34;2960&#34;
+	height=&#34;1304&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151015366_hu_5c6d9eeea0b5b389.jpg 480w, http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151015366_hu_27e80c407c035f1c.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404151015366&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;226&#34;
+		data-flex-basis=&#34;544px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;下面的代码在执行的时候只会输出&amp;quot;superclass init&amp;quot;，因为只有父类是被初始化了的，虽然是静态引用，但是父类也会初始化。静态变量在编译器编译完成阶段就会被加载到当前类的常量池中，完成和引用类的解耦，这里会初始化存粹是因为父类需要初始化。配合这个例子大家可以看一下TestClass2,TestClass3的代码，思考下为什么。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151039685.jpg&#34;
+	width=&#34;3066&#34;
+	height=&#34;1180&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151039685_hu_603a2060ff0873c1.jpg 480w, http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151039685_hu_768bedb0e9137987.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404151039685&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;259&#34;
+		data-flex-basis=&#34;623px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h2 id=&#34;类加载器&#34;&gt;&lt;strong&gt;类加载器&lt;/strong&gt;
+&lt;/h2&gt;&lt;p&gt;上面我们介绍了类加载的步骤，让我们概括一下类加载器的职责。在类的加载阶段，通过类的全限定名区获取类的二进制字节流，实现这个功能的代码就是类加载器。类加载器在osgi，代码热部署，代码加密等领域大放溢彩。&lt;/p&gt;
+&lt;p&gt;虽然类加载只作用在加载阶段，但是它起到的作用不仅仅在加载阶段。对于任意一个类，都需要加载这个类的类加载器和这个类本身在JVM中确立唯一性。通俗的说，两个类是否相等，取决于两个类是否是同一个类加载器加载，否则就算是同一个路径下的Class文件，在同一个虚拟机中被加载，也被视作不同的类。这里说的两个类是否相等，包括equals()的返回值，instanceOf判断，isInstance()的返回值等等。所以这个规定也影响到equals(),instanceOf等方法的返回结果。这里我给一个例子可以查看代码ClassLoaderTest，自定义类加载器，然后创建出自己，在用创建出的类实例判断是否instanceof自己，返回false。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151125588.jpg&#34;
+	width=&#34;3438&#34;
+	height=&#34;1856&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151125588_hu_3add46740bf03f06.jpg 480w, http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404151125588_hu_a88c5478670c03ca.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404151125588&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;185&#34;
+		data-flex-basis=&#34;444px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;上面的例子虽然简单，但是也足够说明类加载器的功能了。那么什么时候需要自定义类加载器呢，常见的有3种情况&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;加密解密，java代码很容易被反编译，但是可以通过某些算法将java代码加密，然后自己实现类加载器，在类加载器中解密&lt;/li&gt;
+&lt;li&gt;从非标准源读取类，比如字节码不是在磁盘中，而是数据库甚至网络中，就可以自定义加载指定源的类加载器&lt;/li&gt;
+&lt;li&gt;动态创建类，实现类的热更新，比如OSGI（开放网关协议）&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h2 id=&#34;双亲委派模型&#34;&gt;双亲委派模型
+&lt;/h2&gt;&lt;p&gt;类加载器是JVM的一个工作模块，JVM中会存在多个类加载器，如果将这些类加载器按照某些规则排序，比如按照加载类的优先级来排序，我们就得到了一个类加载器的层次优先级，这个优先级模型就被称为双亲委派模型。 从虚拟机角度看，只有两种classLoader，启动类加载器Bootstrap ClassLoader（C++实现，有的由纯java语言实现的虚拟机则是用java实现的这个类加载器），另一种就是所有其他类加载器。类加载器工作在创建对象的加载步骤（创建对象总共3步，加载，链接，初始化）&lt;/p&gt;
+&lt;p&gt;从开发人员角度看，有3中类加载器&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/%E5%8F%8C%E4%BA%B2%E5%A7%94%E6%B4%BE%E6%A8%A1%E5%9E%8B.jpg&#34;
+	width=&#34;1404&#34;
+	height=&#34;1040&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/%E5%8F%8C%E4%BA%B2%E5%A7%94%E6%B4%BE%E6%A8%A1%E5%9E%8B_hu_9ec6739fdd548684.jpg 480w, http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/%E5%8F%8C%E4%BA%B2%E5%A7%94%E6%B4%BE%E6%A8%A1%E5%9E%8B_hu_e0b76a1db6b04364.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;双亲委派模型&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;135&#34;
+		data-flex-basis=&#34;324px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;启动类加载器Bootstrap ClassLoader，负责加载JAVA_HOME/lib目录下的类到虚拟机。启动类加载器无法被java程序直接引用。如果需要使用启动类加载器，在自定义classloader的getClassLoader方法里直接return null即可。当然一般我们不会这么做因为这么做就相当于没有自定义Classloader了，一般是用在根据某些条件获取不到ClassLoader时使用启动类加载器来兜底&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404152631335.jpg&#34;
+	width=&#34;2852&#34;
+	height=&#34;1242&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404152631335_hu_101730b08c08a69.jpg 480w, http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404152631335_hu_d4a8e35109ec94c2.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404152631335&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;229&#34;
+		data-flex-basis=&#34;551px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;扩展类加载器Extension ClassLoader,它负责加载JAVA_HOME/lib/ext目录下或者被java.ext.dirs系统变量指定的路径中的所有类库。开发者可以直接使用这个类加载器。&lt;/li&gt;
+&lt;li&gt;应用类加载器Appliaction ClassLoader。这个类加载器是ClassLoader中的getSystemClassLoader()方法的返回值，一般也称为系统类加载器。它负责加载用户路径ClassPath上指定的所有类库。如果系统没有自定义类加载器，那么这个加载器就是默认的类加载器。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;应用程序都是由这三种类加载器之间互相配合完成的，有需要就可以自定义类加载器。&lt;/p&gt;
+&lt;p&gt;所谓双亲委派模型就是指这些类加载器之间的层次关系，除了启动类加载器，所有其他类加载器都有自己的父类加载器，这里的类加载器关系一般都由组合而不是继承的方式来复用父类加载器的代码。&lt;/p&gt;
+&lt;p&gt;双亲委派模型的工作过程是：如果一个类加载收到了类加载请求，她不会自己去加载这个类，而是把这个请求交给父类加载器去完成，这个请求会被传递一直到顶层的启动类加载器。只有当父类加载器不能完成加载请求（他的搜索范围内没有找到需要的类）时，子类加载器才回去加载。当然这是一个理论描述，我们可以从代码角度去观察，实际实现就是在ClassLoader的laodClass方法内，可以看到，首先会检查父类加载器parent存不存在，存在就使用父类加载器加载。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/2023-06-26-11-05-04-image-2213535.jpg&#34;
+	width=&#34;3390&#34;
+	height=&#34;1382&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/2023-06-26-11-05-04-image-2213535_hu_4c635fae1dd8267c.jpg 480w, http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/2023-06-26-11-05-04-image-2213535_hu_5d302139e00d643c.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;img&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;245&#34;
+		data-flex-basis=&#34;588px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;使用双亲委派模型的好处是所有类都具备一种优先的层次关系。比如Object，无论哪个类加载加载这个类，最终都是委派给处于模型最顶端的启动类加载器加载，也就是同一个类。如果不是同一个类，java体系中最基本的行为就得不到保证。&lt;/p&gt;
+&lt;p&gt;自定义类加载器&lt;/p&gt;
+&lt;p&gt;自定义类加载器，其实就是继承ClassLoader并且重写findClass方法。这里我自定义的类加载器功能是从指定目录读取class文件的字节流。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404152936528.jpg&#34;
+	width=&#34;3296&#34;
+	height=&#34;1750&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404152936528_hu_e288878d7788b7c.jpg 480w, http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404152936528_hu_ea599b65d9a6520f.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404152936528&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;188&#34;
+		data-flex-basis=&#34;452px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;通过调用自定义类加载器并且通过反射创建出指定的对象，并且执行方法&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404153017758.jpg&#34;
+	width=&#34;3528&#34;
+	height=&#34;1662&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404153017758_hu_b6de77b6f409728b.jpg 480w, http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20240404153017758_hu_b8c194713493bf45.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240404153017758&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;212&#34;
+		data-flex-basis=&#34;509px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h3 id=&#34;打破双亲委派规则&#34;&gt;打破双亲委派规则
+&lt;/h3&gt;&lt;p&gt;所谓打破双亲委派规则，就是改变我们之前说的，总是由父类加载器优先去加载类实例。&lt;/p&gt;
+&lt;p&gt;类加载器一开始的自定义方法是覆盖loadClass方法，现在则是重写findclass方法，其实findClass方法也是在laodClass方法里调用的的。在loadClass方法内，如果父类加载获取不到class,就会调用findClass方法。这就是双亲委派模型的工作方式。如果需要打破这个模型，其实就是重写loadClass方法。这里我不举例子，大家知道怎么做即可。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20230626114132707-2213535.jpg&#34;
+	width=&#34;3398&#34;
+	height=&#34;1614&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20230626114132707-2213535_hu_d79a2bd2ed1b3ced.jpg 480w, http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/image-20230626114132707-2213535_hu_8d44d57c6efa5676.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20230626114132707&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;210&#34;
+		data-flex-basis=&#34;505px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;双亲委派模型历史上出现过3次被打破的情况，分别是&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;JDK1.2之前自己打破双亲委派模型 原因是类加载器是从JDK1.0开始就存在的，但是双亲委派模型是JDK1.2引入的，在双亲委派模型出现之前自定义的类加载器都是重写的laodClass方法，为了兼容这种情况，JDK1.2添加了一个protected的laodClass方法，这样类加载器中就有两个laodClass方法，public的loadClass方法唯一的作用就是调用protected的laodClass。但是原先的1.2之前出现的类加载器已经打破了双亲委派模型。所以1.2之后都是通过重写findClass来完成自定义类加载器的工作。&lt;/li&gt;
+&lt;li&gt;双亲委派模型的第二次破坏是由双亲委派模型的缺陷决定的。我们知道用户重写的是findClass方法，而比较基础的类则是直接委托给顶层的类加载器加载。那么假设基础的类想要访问用户的代码会怎么样，比如JNDI(JNDI是一个资源查找管理服务，它会查找classPath下实现JNDI提供者的代码)这就要求基础类加载器能够识别出用户自定义的代码。为了解决这个问题，java的团队引入了不太优雅的线程上下文类加载器，这个类加载器通过线程的Thread.setContextClassLoader()，这个类加载器会在线程创建时设置，如果不设置就从父线程继承，如果父线程没有，且全局都没有设置，那么就是用应用类加载器。有了这个加载器，父类加载器就能够在特定的条件下去使用子类加载器加载所需要的SPI代码,而且目前JAVA所有涉及SPI的加载动作都是这样完成的，如jdbc,jce，jaxb,jbi等。但是这明显打破了双亲委派模型的一般性规则(即总是先由父类去加载，父类无法完成再使用子类去完成)&lt;/li&gt;
+&lt;li&gt;双亲委派模型的第三次破坏则是为了追求动态性(代码热部署，热更新)做出的妥协，在某些场景下关机一次就会产生事故，为了应对这些场景就需要热部署的功能。热部署的解决方案是模块化，模块化在业界的事实标准是OSGI(也被称为JSR-291提案，SUN也有自己的提案但是失败了，提案是有业界大牛提供给jcp,然后由委员会决策通过的)，OSGI技术的关键每个模块独有自己的类加载器，且各个模块之间类加载器互相关联，这就不是原先的双亲委派模型的层级结构，而是网状结构。OSGI的搜索方式很复杂，不做介绍，我们知道有这么个事情即可。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;打破双亲委派规则是可以的，只要有足够的理由，合理的创新也是值得推荐的。&lt;/p&gt;
+&lt;h2 id=&#34;类加载实例&#34;&gt;类加载实例
+&lt;/h2&gt;&lt;p&gt;讲完了类加载器的功能和工作方式，我们再通过几个案例来讲解类加载的时机以及要求。常见的tomcat,jetty,weblogic都实现了自己的类加载器。以tomcat为例，因为TOMCAT使用的是正统且标准的类加载器结构，一个web服务器要解决很多问题，比如&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;部署在一个web服务器下的程序的类库需要互相独立，不能干扰。&lt;/li&gt;
+&lt;li&gt;多个程序之间如果有相同的类库，必须能复用，因为如果简单地只是每个服务单独加载自己的类库是很浪费资源的。比如两个服务里都使用到了guava包，而且版本一样，那么两个服务最好都加载同一个包。&lt;/li&gt;
+&lt;li&gt;服务器本身不能受到程序的类库的影响&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;为了实现这些需求，如果是简单的使用应用程序类加载器只读取classpath目录下的类库，很明显会因为类库的冲突发生错误。所以tomcat得做法是划分出多个目录，common,server,shared,加上web程序jar内部自身的web-inf目录，对这些目录分别使用不同的类加载器达到不同的效果，common目录下的类库可以被tomcat和web应用程序公用，server目录下的则可以被tomcat使用，shared目录下类库的可以所有web服务器使用。jar包自身的web-inf目录下的类库则只能被web程序使用。为此tomcat定义了多个类加载器。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/tomcat%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8.jpg&#34;
+	width=&#34;860&#34;
+	height=&#34;1572&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/tomcat%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8_hu_7b97070ab76f04fa.jpg 480w, http://localhost:1313/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/tomcat%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8_hu_90c206c6ac12b36f.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;tomcat类加载器&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;54&#34;
+		data-flex-basis=&#34;131px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;额外说一下JSP，虽然已经淘汰了。JSP是每个JSP文件一个JSP类加载器，很操蛋是吧，这也决定了它性能很垃圾。再考虑一种场景，使用sparing开发的程序，使用tomcat部署，spring类库被放在common路径下，但是如果一个tomcat部署了10个spring程序，那么spring是怎么分别获取到这些程序的启动入口的呢？其实就是通过SPI机制配合自定义类加载器完成的，这也是spring的starter的核心原理。&lt;/p&gt;
+&lt;h1 id=&#34;end&#34;&gt;END
+&lt;/h1&gt;&lt;p&gt;到这里类加载器的内容就讲完了，类加载器是面试里非常高频的考点，大家一定要好好学。项目里用到的代码可以在公众号上回复8121获取。&lt;/p&gt;
+</description>
+        </item>
+        <item>
+        <title>内存管理页面置换算法</title>
+        <link>http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/</link>
+        <pubDate>Sun, 31 Mar 2024 00:00:00 +0000</pubDate>
+        
+        <guid>http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/</guid>
+        <description>&lt;img src="http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/cover.jpg" alt="Featured image of post 内存管理页面置换算法" /&gt;&lt;h2 id=&#34;学习背景&#34;&gt;学习背景
+&lt;/h2&gt;&lt;p&gt;在前面的章节，我们学习了什么是虚拟内存，了解到了虚拟内存的结构。但是还有个问题我们没回答，就是内存调入换出时的策略/算法是怎么样的，本章节就来讲解。虚拟内存的知识在面试里问的也不多(字节除外)，但是如果问到了一般都会以页面置换算法为考点提问，所以还是比较重要，当然，如果是纯JAVA开发问到这块的可能性比较小，大家酌情掌握。&lt;/p&gt;
+&lt;h2 id=&#34;页面置换算法&#34;&gt;页面置换算法
+&lt;/h2&gt;&lt;p&gt;当发生缺页中断时，就需要将一个页面从内存换出，来腾出空间将磁盘的数据调入，如果换出的页面是脏页，那么还需要先写入磁盘。而如果不是脏页，则直接用调入的内存覆盖即可。我们的目标是选择在未来时间中最少使用到的页面，以便减少页面换出的次数从而提升性能。&lt;/p&gt;
+&lt;h3 id=&#34;最优页面置换算法&#34;&gt;最优页面置换算法
+&lt;/h3&gt;&lt;p&gt;最优页面置换算法思路很简单，就是寻找到一个在接下来时间中最少被使用的页面，比如一个页面在800w条指令后被访问，另一个页面在600W条指令后被访问，那么很明显应该置换800w后被访问的页面。但是实际上操作系统不可能预知未来哪个页面会被问到，虽然可以通过仿真实验，记录下所有页面的访问情况，然后再发生换出时，以上一次记录的页面访问情况来作为根据判断最少使用的页面，但是所有仿真都是只针对一个程序的和输入数据的，而操作系统总是运行着各种各样的程序。所以这种算法实际上无法实现。&lt;/p&gt;
+&lt;h3 id=&#34;最近未使用页面置换算法not-recently-used&#34;&gt;最近未使用页面置换算法（not recently used）
+&lt;/h3&gt;&lt;p&gt;操作系统为一个页面有设置个状态为M(修改)位，R(读或者写位又叫访问位)位，注意这里只要写入了，也会修改R位，且R位会周期性(比如每次时钟中断)的被被设置为0，不设置M位是因为需要知道那个页面被修改了，将修改的信息换出到磁盘。那么一个页面有4种状态编号&lt;/p&gt;
+&lt;ol start=&#34;0&#34;&gt;
+&lt;li&gt;
+&lt;p&gt;没有访问，没有修改，R=M=0&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;没有访问，有修改，R=0,M=1&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;没有修改，有访问,R=1,M=0&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;有修改，有访问,R=M=1&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;看起来2似乎是不可能的，但是当R位被时钟周期置为0之后就会出现情况2。NRU算法随机选择一个最小的编号页面淘汰。比如在最近一个时钟滴答(大约20ms)内，淘汰一个没有非访问的页面，实际上淘汰一个被修改的但是没有被访问页面要比淘汰一个被访问但是没被修改的页面效果要更好。&lt;/p&gt;
+&lt;h3 id=&#34;先进先出页面置换算法fifo&#34;&gt;先进先出页面置换算法(FIFO)
+&lt;/h3&gt;&lt;p&gt;操作系统维护一个当前内存的链表，将新进入的页面放在队尾，最早进入的放在队头，当发生缺页中断时，淘汰表头，并发新调入的页面追加到队尾。这个算法的效果其实并不好，因为有可能把经常使用的页面置换出去，实际上很少有操作系统存粹使用这种算法&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/FIFO%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95.jpg&#34;
+	width=&#34;1780&#34;
+	height=&#34;594&#34;
+	srcset=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/FIFO%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95_hu_7a12fba8de830016.jpg 480w, http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/FIFO%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95_hu_23695a880aa76d0e.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;FIFO页面置换算法&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;299&#34;
+		data-flex-basis=&#34;719px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h3 id=&#34;第二次机会页面置换算法&#34;&gt;第二次机会页面置换算法
+&lt;/h3&gt;&lt;p&gt;二次机会法是对FIFO的改进，检查队头的页面的R位，如果R位是0，那么换出这个页面，如果是1，将R位清0，并放入队尾。然后向下搜索。很明显，如果操作系统在最近对所有页面都访问过，那么这个算法效果和FIFO一样。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E4%BA%8C%E6%AC%A1%E6%9C%BA%E4%BC%9A%E6%B3%95.jpg&#34;
+	width=&#34;1831&#34;
+	height=&#34;478&#34;
+	srcset=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E4%BA%8C%E6%AC%A1%E6%9C%BA%E4%BC%9A%E6%B3%95_hu_c8e68aef9371f218.jpg 480w, http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E4%BA%8C%E6%AC%A1%E6%9C%BA%E4%BC%9A%E6%B3%95_hu_b2e636850b947984.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;二次机会法&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;383&#34;
+		data-flex-basis=&#34;919px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h3 id=&#34;时钟页面置换算法clock&#34;&gt;时钟页面置换算法(clock)
+&lt;/h3&gt;&lt;p&gt;其实是对二次机会法的改进，因为二次机会法需要经常移动页面，为了避免移动页面带来的效率问题，我们把所有页面组成一个环形链表，然后还是使用第二次机会法，只是当发现页面的R位是0时，将这个页面换出，然后新调入的页面插入到换出的位置，同时指针向下一个页面移动。因为环形链表看起来像是时钟，所以这个算法叫做时钟算法。(这个圆形的时钟真的难画，大家有好的画图方法可以教我一下就好了，怎么快速的画出来一个时钟的结构)&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E6%97%B6%E9%92%9F%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95.jpg&#34;
+	width=&#34;1197&#34;
+	height=&#34;696&#34;
+	srcset=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E6%97%B6%E9%92%9F%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95_hu_7fffaba4ef06e34a.jpg 480w, http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E6%97%B6%E9%92%9F%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95_hu_371956197f5b8446.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;时钟页面置换算法&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;171&#34;
+		data-flex-basis=&#34;412px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h3 id=&#34;最近最少使用算法lru&#34;&gt;最近最少使用算法(LRU)
+&lt;/h3&gt;&lt;p&gt;对最优页面置换算法的一个近视是，在前面几条指令中频繁被使用的页面，在接下来的指令中也可能被频繁的使用。相反的，在前面几条指令中不怎么使用的页面，在未来的指令中也不太可能被使用。这就是LRU的策略。当缺页中断时置换未使用时间最长的页面。但这个算法代价很高，因为要维护一个关于所有页的链表，使用频繁的在表头，使用较少的在表尾。有的使用特殊硬件实现，比如特殊计数器C，每当一页页面被访问后将页面中一个值+1，当发生缺页中断时检查所有页面的值，淘汰值最小的页面。&lt;/p&gt;
+&lt;p&gt;实际上很少有计算机有这种硬件，所以还需要软件实现。常用的方案是NFU(not frequently used),每次时钟中断时将页面的R位取出来加到页面的计数器上，这样这个计数器就大致跟踪了各个页面的访问频繁程度。但是这么做还是不完美，因为假设在两次扫描时间间隔中间，有一个页面被频繁访问，但是在第二次扫描时,还是只给这个页面+1，假设那么这个页面是刚申请的页面，那么很有可能这个页面就会被淘汰掉。实际上第一次扫描出的计数器较大的页面，在第二次扫描时，值也总是还是很大。&lt;/p&gt;
+&lt;p&gt;解决方式是老化(aging)算法，比如说，计数器是8位，每次还是读取页面的R位，然后在加上R为之前，将计数器右移一位，然后加到计数器上，但是加到计数器的最左边(也就是最高位)，比如下面的图，经过4个时钟滴答，4个页面每个页面的计数器变化如下。很显然的在发生中断时我们应该淘汰掉值最小的页面，因为这个页面在最近的时间里并没有被访问到。但老化算法和LRU是不一样的，它有两个不同点&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;老化算法不能区分在同一个时钟滴答里，两个页面的先后访问顺序&lt;/li&gt;
+&lt;li&gt;加入两个页面在老化算法里的时钟滴答都是0，但是一个是在9个时钟滴答前被访问过，另一个是在100个时钟滴答前被访问过，也区分不出来，只能随机选择一个页面置换。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E6%9C%80%E8%BF%91%E6%9C%80%E5%B0%91%E4%BD%BF%E7%94%A8%E7%AE%97%E6%B3%95.jpg&#34;
+	width=&#34;2210&#34;
+	height=&#34;822&#34;
+	srcset=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E6%9C%80%E8%BF%91%E6%9C%80%E5%B0%91%E4%BD%BF%E7%94%A8%E7%AE%97%E6%B3%95_hu_662e71e719403b6e.jpg 480w, http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E6%9C%80%E8%BF%91%E6%9C%80%E5%B0%91%E4%BD%BF%E7%94%A8%E7%AE%97%E6%B3%95_hu_21ee9b59e241e57c.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;最近最少使用算法&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;268&#34;
+		data-flex-basis=&#34;645px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;在实践中，计数器往往设置为8位，而时钟滴答设置为20ms，这个设置一般是够用的。一般一个页面经过160MS还没被访问过，说明这个页面也没那么重要&lt;/p&gt;
+&lt;h3 id=&#34;工作集页面置换算法&#34;&gt;工作集页面置换算法
+&lt;/h3&gt;&lt;p&gt;之前说的页面置换算法都是局部页面置换算法，局部页面置换算法没有考虑进程内存访问的差异性，也就是进程在不同阶段的内存需求是不一样的，而且物理页面就这么多，不管怎么置换，对于全局的缺页次数并不能减少。而全局页面置换算法则是从所有进程的角度去考虑，选择出对于进程而言可以换出的物理页面。&lt;/p&gt;
+&lt;p&gt;一个进程在一段时间内正在使用的逻辑页面集合被称为工作集(working set)，而实际驻留在物理内存的页面被称为常驻集，当常驻集包含较多的工作集时，缺页较少，工作集剧烈收缩或者扩张时，缺页较多。如果程序在运行阶段发生了大量的缺页中断导致程序运行很慢，就说明程序发生了颠簸(denning)。最理想的目标是在程序运行之前就已经把程序所需的工作集全部调入内存中，这叫做预先调页(preparing)。注意工作集是随着时间变化的。很多系统都会射法跟踪进程的工作集，以确保程序在运行之前，工作集已经在内存中了。该方法被称为工作模型。&lt;/p&gt;
+&lt;p&gt;一个进程从它开始执行到当前时刻，这期间使用cpu的时间称为实际运行时间。假设一个进程在T时间开始运行，在T+100ms的时刻使用了40ms的cpu时间，那么它的工作时间就是40ms(每个进程的工作时间不一样，一般是设置为∏),工作集定义就是40ms内这个进程使用过的页面。基于工作集的页面置换算法就是要找出一个不在工作集的页面并淘汰他(注意并不是发生缺页中断时才会扫描该进程的所有工作集，随着程序的执行工作集会被更新)。每个表项需要两个信息，页面最近使用时间和R，扫描所有页面&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;r = 1&lt;/p&gt;
+&lt;p&gt;设置上次使用时间为当前时间，表示缺页中断时该页面正在被使用&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;r = 0,且 生存时间 &amp;gt; ∏
+换出这个页面，用新的页面置换他(如果需要)&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;r = 0，且生存时间 &amp;lt; ∏
+保留页面，不设置生存时间，但是但记住最长生存时间，当扫描完所有页面还没找到一个被淘汰的页面，就淘汰掉生存时间最长的页面&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;最坏的情况下，所有页面r都为1，那么就随机选择一个干净的页面淘汰。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E5%B7%A5%E4%BD%9C%E9%9B%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95.jpg&#34;
+	width=&#34;2191&#34;
+	height=&#34;895&#34;
+	srcset=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E5%B7%A5%E4%BD%9C%E9%9B%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95_hu_81c76528c1d02862.jpg 480w, http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E5%B7%A5%E4%BD%9C%E9%9B%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95_hu_98390eb373af49bd.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;工作集页面置换算法&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;244&#34;
+		data-flex-basis=&#34;587px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;可以看到，没次置换出去的页面就是距离上次访问超过4的页面，红点页面表示换入的页面。&lt;/p&gt;
+&lt;h3 id=&#34;工作集时钟页面置换算法wsclock&#34;&gt;工作集时钟页面置换算法(wsclock)
+&lt;/h3&gt;&lt;p&gt;因为工作集算法需要扫描所有页面，所以这种做法效率并不高。时钟工作集的工作方式和时钟算法很像，将页框组成一个循环表，每个表项包含来自基本工作集算法的上次使用时间，以及R位和M位，当发生缺页中断时，如果R=1，说明该页面被使用过，将R位置为0，指针向下移动。当R=0时，查看该页面的生存时间π,如果π大于生存时间，且页面是干净的，就换出该页面，如果不是干净的就先写入磁盘，然后换出。此时，算法不会停止，而是继续往下走，因为在前方可能存在一个干净的未使用的页面。这么做是为了避免在时钟周期中被IO阻塞，实际上为了避免被过多的写磁盘引起的进程切换，能够换出的页面个数是有限制的，不超过n个，一旦达到就不允许新的写调度操作。&lt;/p&gt;
+&lt;p&gt;如果指针经过一圈返回了起点，那么有可能已经发生过一次或多次换出，也可能一次都没发生。如果发生了那么肯定会有某个页面写操作被完成，该页面是干净的，可以被换出。如果没有发生过换出，说明所有页面都在工作集中，那么此时只能选择一个干净的页面来换出，如果不存在干净页面就找一个页面写磁盘，然后换出。&lt;/p&gt;
+&lt;h3 id=&#34;缺页率页面置换算法page-fault-frequency&#34;&gt;缺页率页面置换算法(Page Fault Frequency)
+&lt;/h3&gt;&lt;p&gt;缺页率=缺页次数/内存访问次数 这是标准计算公式，实际上这个公式并不好用，更多时候使用平均缺页时间间隔的倒数。影响缺页率的因素有，页面置换算法，分配给进程的物理页数，页面大小，程序局部性特征&lt;/p&gt;
+&lt;p&gt;缺页率页面置换算法通过跟踪进程的缺页率，来将每个进程的缺页率控制在一个合理的范围，如果缺页率高，就增加工作集以分配更多的物理页面，如果缺页率过低，就减少工作集，将一些页面置换到外存。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E7%BC%BA%E9%A1%B5%E7%8E%87%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95.jpg&#34;
+	width=&#34;2114&#34;
+	height=&#34;992&#34;
+	srcset=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E7%BC%BA%E9%A1%B5%E7%8E%87%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95_hu_bdad798b2d5d6991.jpg 480w, http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E7%BC%BA%E9%A1%B5%E7%8E%87%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95_hu_5034c642c77d3546.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;缺页率页面置换算法&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;213&#34;
+		data-flex-basis=&#34;511px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;举这个例子，假设时间间隔为2，即窗口大小&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;在第4时刻，发生缺页中断，距离上次缺页中断1间隔为3，大于规定的缺页间隔，说明程序运行的比较好，可以把一些页面换出，那么在时间间隔为2的时间内，程序访问了c,d,b的页面(即2,3,4时刻访问的页面)。所以从当前工作集这个呢换出a,e页面&lt;/li&gt;
+&lt;li&gt;在时刻6，又发生了中断，此时因为间隔&amp;lt;=2,不需要换出，直接将缺页调入内存&lt;/li&gt;
+&lt;li&gt;在时刻9又发生了缺页，间隔为3，那么将缺页调入。7-9的时间内访问了c,e,a页面所以换出b,d页面&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h3 id=&#34;做个总结&#34;&gt;做个总结
+&lt;/h3&gt;&lt;p&gt;上面介绍了很多的算法，实际上这些算法并不是独立存在的，在操作系统里是多个算法互相配合完成页面置换。我们对他们做个总结。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E7%AE%97%E6%B3%95%E6%80%BB%E7%BB%93.jpg&#34;
+	width=&#34;722&#34;
+	height=&#34;1429&#34;
+	srcset=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E7%AE%97%E6%B3%95%E6%80%BB%E7%BB%93_hu_45bb82ce6fce9329.jpg 480w, http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E7%AE%97%E6%B3%95%E6%80%BB%E7%BB%93_hu_c872fa9a6ae9e867.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;算法总结&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;50&#34;
+		data-flex-basis=&#34;121px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h2 id=&#34;页面设计&#34;&gt;页面设计
+&lt;/h2&gt;&lt;p&gt;以下讲解在页面设计时需要注意的一些点，因为不同的页面特点也会影响页面置换算法的工作效率。&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;页面大小
+一般来说更大的页面能使用更小的页表，且更能利用TLB表项，因为TLB是很稀缺的资源，用较少的TLB表项表示更大的页面内存就能够提供更多的页表缓存。比如一个进程使用64K内存，一个页4K就需要16个页表项，一个页4M则只需要1个页表项。内存与磁盘之间的传输一般是一次传输一页，而且传输时间大部分都花在了寻到和旋转延迟上，所以传输一个小页面和大页面的耗时是基本相同的。更少的页面写入也代表更少的io延迟。&lt;/li&gt;
+&lt;li&gt;分离指令空间和数据空间
+将指令存储在I空间，数据存储在D空间，每个空间存在独立的页表，这样能使用的地址空间可以加倍。因为其他进程可以复用I空间和D空间，行程他们自己的页表。&lt;/li&gt;
+&lt;li&gt;共享页面
+一般适合共享的都是只读的程序代码，而数据一般不适合共享，而且在I空间和D空间分开后，共享页面变得比较简单。共享数据则必共享数据麻烦，一种解决办法是如果两个进程只是读数据，则不复制，如果写数据，责复制写的页面，为每个进程生成一个单独的页副本，这种机制叫做写时复制。&lt;/li&gt;
+&lt;li&gt;共享库
+windows中称为DDL或者动态链接库。一些大型公用的库基本都是通过链接来做的，即将执行函数(如print)保存在磁盘，真正执行时链接器会将可执行文件加载进内存。而动态链接则是不加载需要的可执行文件，而是加载一段能够在运行时绑定被调用函数的存根例程(stub routine)，而且共享库不是一次加载进内存，而是根据需要以页面单位装载。&lt;/li&gt;
+&lt;li&gt;内存映射(memory mapped file)
+共享库是内存映射的一种页数机制。内存映射的思想是，进程发起的系统调用会被映射到虚拟地址空间，而被映射的页面不会实际读入内容而是使用到的时候才以页为单位从磁盘读入。很显然的，进程可以使用这种方式来完成通信。&lt;/li&gt;
+&lt;li&gt;清除策略
+分页系统一般存在一个分页守护进程(paging demon),它被定期唤醒，如果空闲页框过少，则使用页面置换算法将脏页写会磁盘，并且保证系统中有足够多干净的页面。一种是先策略叫做双指针时钟，即前一个指针指向前移动，遇到脏页就写磁盘，后面的指针则做页面置换，因为前一个指针的存在后一个指针找到干净页面的概率会增加。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h2 id=&#34;缺页中断处理&#34;&gt;缺页中断处理
+&lt;/h2&gt;&lt;p&gt;这里介绍一下发生缺页时操作系统的工作过程是怎么样的，当然具体的细节很复杂，大家掌握一个大概的工作流程即可。&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;硬件陷入内核，将当先指令的各种状态信息保存在特殊的CPU寄存器中&lt;/li&gt;
+&lt;li&gt;启动一个汇编例程保存通用寄存器和其他的易失信息，以免被操作系统破坏。&lt;/li&gt;
+&lt;li&gt;当操作系统发现一个缺页中断时，会尝试发现需要哪个虚拟页面，通常一个硬件寄存器的包含了这一个信息，如果没有的话，操作系统会检索程序寄存器，取出这条指令，并用软件分析这个指令，看它在缺页中断时在做什么&lt;/li&gt;
+&lt;li&gt;一旦知道了缺页中断的虚拟地址，检查这个地址是否有效，检查存取与保护是否一致，不一致就发出信号或者杀掉进程。否则检查是否有空闲页框，没有就执行页面置换算法。&lt;/li&gt;
+&lt;li&gt;如果选择的页框脏了，那么回写磁盘，这个过程会发生线程上下文切换，挂起产生缺页中断的进程，让其他进程运行直到磁盘传输结束，该页框会被标记为忙，防止其他进程占用&lt;/li&gt;
+&lt;li&gt;回写完毕后将从磁盘查找页面的内容，调入内存，这时进程仍然挂起&lt;/li&gt;
+&lt;li&gt;当磁盘中断发生时，说明该页面已经被装入，表示可以更新它的位置，页框也被标记为正常状态&lt;/li&gt;
+&lt;li&gt;恢复缺页中断指令以前的状态，程序计数器指向这条指令&lt;/li&gt;
+&lt;li&gt;调度引发缺页中断的进程，操作系统会返回它的汇编语言例程&lt;/li&gt;
+&lt;li&gt;恢复该例程的寄存器和其他状态信息，返回到用户空间继续执行，就像没发生过缺页中断一样。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h2 id=&#34;分段和分页结合&#34;&gt;分段和分页结合
+&lt;/h2&gt;&lt;p&gt;为什么要分段或分页，假设虚拟地址时一维的，也就是地址从0到最大值增长，一个地址接着另一个地址，有两个独立的地址会比只有一个要好得多。比如编译器在编译是需要建立很多表，有的表保存程序源文件，有的保存符号变量名字和属性，有的保存整形或者浮点的常量，以及程序内部调用堆栈。其中程序内部调用堆栈会不断增长或者缩小，那么这5个（有个没写）表的排列假设如下。但是很明显的调用堆栈一般比其他表更大，而常量表则比较小，有可能常量表还有空间，而调用堆栈已经用完了。甚至两个表地址互相增长发生碰撞。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E5%88%86%E6%AE%B5%E5%92%8C%E5%88%86%E9%A1%B5%E7%BB%93%E5%90%88.jpg&#34;
+	width=&#34;766&#34;
+	height=&#34;900&#34;
+	srcset=&#34;http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E5%88%86%E6%AE%B5%E5%92%8C%E5%88%86%E9%A1%B5%E7%BB%93%E5%90%88_hu_cca205105ab8177f.jpg 480w, http://localhost:1313/p/%E5%86%85%E5%AD%98%E7%AE%A1%E7%90%86%E9%A1%B5%E9%9D%A2%E7%BD%AE%E6%8D%A2%E7%AE%97%E6%B3%95/index.assets/%E5%88%86%E6%AE%B5%E5%92%8C%E5%88%86%E9%A1%B5%E7%BB%93%E5%90%88_hu_c543fc23eaeb6629.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;分段和分页结合&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;85&#34;
+		data-flex-basis=&#34;204px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;一种比较好的解决方式就是分段，即将地址空间分为多个独立的地址空间，每个地址空间从0到最大地址序列，且段的长度不同，可以在运行时动态改变。因为段地址之间互相独立，所以怎么增长缩短都不会互相影响。但是段地址是可能被填满的，一般程序需要提供两个部分，一个是段号，一个是段内地址。注意段是逻辑实体，而且可以包含不同的内容，针对这些内容我们可以做不同的设置，比如只包含程序过程的段是只读可执行的，而一个浮点值的段则是可读写，不可执行的。&lt;/p&gt;
+&lt;p&gt;分页和分段的区别则是，段是大小可变的，而分页则是大小不可变的，因为一个很大的段是很难管理的，所以又需要在段内进行分页。分页机制因为是代销固定的内存块，更加适合管理管理内存，而分段机制则更加适合复杂系统，段表存储在线性地址空间，而页表则保存在物理地址空间。段的定义需要三个参数，段基地址，段长，段属性。&lt;/p&gt;
+&lt;h2 id=&#34;end&#34;&gt;END
+&lt;/h2&gt;&lt;p&gt;到这里，虚拟内存的知识我们基本学习完毕了，大家可以将两个文档串起来仔细消化一下这里的内容，虽然不是面试的重点，但是里面的很多设计思想都很好。以后我们讲到一些数据结构的时候大家就会有感觉，比如redis内存淘汰算法，布隆过滤器等&lt;/p&gt;
+</description>
+        </item>
+        <item>
+        <title>虚拟内存前世今生</title>
+        <link>http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/</link>
+        <pubDate>Sat, 30 Mar 2024 00:00:00 +0000</pubDate>
+        
+        <guid>http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/</guid>
+        <description>&lt;img src="http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/cover4.jpg" alt="Featured image of post 虚拟内存前世今生" /&gt;&lt;h2 id=&#34;地址空间&#34;&gt;地址空间
+&lt;/h2&gt;&lt;p&gt;操作系统的内存模型被称为分层存储体系(memory hierarchy),这个体系由若干快速且易丢失且昂贵的高速缓存cache和速度适中价格适中且同样易丢失的内存，以及速度慢，单价格低廉且不易丢失的磁盘构成。
+在比较早期的操作系统中根本没有存储体系抽象，对内存的操作都是直接操作物理内存，比如mov registor1 1000 表示将1000这个位置的内存移动到registor1中。早期一般有三种模型，操作系统位于ram的底部，操作系统位于rom的顶部，操作系统位于ram的底部但是驱动程序位于rom的顶部&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4.jpg&#34;
+	width=&#34;2178&#34;
+	height=&#34;924&#34;
+	srcset=&#34;http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4_hu_376ee54916562961.jpg 480w, http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F%E5%9C%B0%E5%9D%80%E7%A9%BA%E9%97%B4_hu_39f2a7f86c458394.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;操作系统地址空间&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;235&#34;
+		data-flex-basis=&#34;565px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;第1,3中都有明显的缺陷就是用户程序对内存的操作可能造成操作系统的崩溃。很明显的对于绝对内存地址的操作存在致命缺陷，因为一个程序可能会操作另一个程序的内存，虽然有一些办法补救，比如静态重定位。但现代操作系统基本不采用这行方案，也就是不直接操作内存。除了少部分嵌入式设备外，因为这些设备的任务都是事前预设好的，用户不可能再烤面包机上运行自己程序。但也有例外，少部分昂贵的嵌入式设备不会直接操作内存。
+为了解决这个问题，我们提出地址空间的概念，地址空间是指一个进程可以寻址的内存地址集合，各个进程只能操作自己的地址空间，除了某些时候需要共享地址空间时除外。地址空间的概念非常广，电话号码，ip甚至网址都可以算作是一种地址空间的标识方法。&lt;/p&gt;
+&lt;h2 id=&#34;基址寄存器和界限寄存器&#34;&gt;基址寄存器和界限寄存器
+&lt;/h2&gt;&lt;p&gt;一种已经过时的内存重定位定位的方法，方程序被重新加载到内存时，我们需要判断它应该被加载到哪个位置。程序的起始地址会被加载到基址寄存器，程序的长度被加载到界限寄存器。每次程序访问内存时，cpu会把地址发送到内存总线，把基址寄存器加到程序发出的地址上，同时检查程序提供的地址是否大于界限寄存器的值，防止访问越界。&lt;/p&gt;
+&lt;h2 id=&#34;交换技术&#34;&gt;交换技术
+&lt;/h2&gt;&lt;p&gt;计算机的内存是有限的，将进程一直保持在内存中需要消耗巨大的内存，如果做不到，那么就需要解决内存超载的问题，常见的解决办法是交换(swapping)技术和虚拟内存(virtual memory),交换内存将程序完整的调入内存，运行一段时间然后存回磁盘，这样空闲的进程就不会占用内存(但是有一部分进程会被周期性唤醒工作后又进入休眠)。虚拟内存则更加先进，甚至允许程序在只有一部分被调入内存的情况下完成。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F-%E8%B0%83%E5%85%A5%E6%8D%A2%E5%87%BA.jpg&#34;
+	width=&#34;2128&#34;
+	height=&#34;788&#34;
+	srcset=&#34;http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F-%E8%B0%83%E5%85%A5%E6%8D%A2%E5%87%BA_hu_cd7f84854bfbe594.jpg 480w, http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E6%93%8D%E4%BD%9C%E7%B3%BB%E7%BB%9F-%E8%B0%83%E5%85%A5%E6%8D%A2%E5%87%BA_hu_27c5e83326f61b83.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;操作系统-调入换出&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;270&#34;
+		data-flex-basis=&#34;648px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;这这个图里，我们看到一开始只有A进程，然后调入B,
+C进程，在d图里显示A又被调出，接着调入D，调出B。最后又把A
+调入。很明显的A
+进程的位置最后发生了变化。在重新调入的时候需要对调入位置进行重新定位,
+基址寄存器和界限寄存器就是用于这种情况。可以发现在调入调出进程的过程中有一部分内存产生了空洞(hole),通过尽可能的将空洞内存往下移，可以将连续的空洞内存合成一块较大的内存。这个技术被称为内存紧缩(memory compaction)，但是这个操作比较浪费时间。还有个问题就是如果进程的内存大小不是固定不变，但是大部分进程都可以从堆中申请内存，如果一个进程的旁边是空闲内存，那么可以直接把空闲内存划分给进程，但是如果进程旁边是另一个进程内存，那么就需要将待交换的进程更换到更大空闲区去，或者把相邻的内存交换到其他空闲区或者调出到磁盘。如果一个进程内存不断增长，且磁盘交换区也满了，那么这个进程只能挂起或者结束。
+为了避免频繁的交互和移动进程内存造成的开销，一种做法是在分配内存时分配额外的内存，但这么做就造成了再交换时，也将额外的不使用的内存交换了出去。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E9%A2%84%E7%95%99%E8%BF%9B%E7%A8%8B%E5%86%85%E5%AD%98.jpg&#34;
+	width=&#34;1626&#34;
+	height=&#34;696&#34;
+	srcset=&#34;http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E9%A2%84%E7%95%99%E8%BF%9B%E7%A8%8B%E5%86%85%E5%AD%98_hu_1926efcc1f150e35.jpg 480w, http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E9%A2%84%E7%95%99%E8%BF%9B%E7%A8%8B%E5%86%85%E5%AD%98_hu_c739e9cd99da8963.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;预留进程内存&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;233&#34;
+		data-flex-basis=&#34;560px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;可以看到，在上图中比如A，除了A程序使用的内存，和A程序存放的数据，还预留了一部分A的堆栈内存，A程序使用的数据从底向上增长，A分配的堆栈自顶向下增长，当两者之间空闲区域被用完了，就将A进程交换出去。或者结束&lt;/p&gt;
+&lt;h2 id=&#34;空闲内存管理&#34;&gt;空闲内存管理
+&lt;/h2&gt;&lt;p&gt;一般内存管理有两种方式，利用位图和链表&lt;/p&gt;
+&lt;h3 id=&#34;位图&#34;&gt;位图
+&lt;/h3&gt;&lt;p&gt;位图的思路很简单，将内存划分为小的几个字节或者几千个字节的分配单元，每个单元表示位图中的一位，0表示空闲，1表示占用。这么做的需要慎重考虑划分的分配单元的大小，比如4个字节占用一个位图和划分32个字节占用一个位图分别需要划分出1/4的内存或者1/32的内存来存储位图。看起来似乎分配单元划分的大一些比较好，但是分配单元划分的过大或导致分配时进程占用内存不是分配单元的整数倍时，最后一个分配单元中就会有一部分内存被浪费。而且在将k个分配单元的进程调入内存时，需要在位图中寻找到k个连续0，这个操作比较耗时还可能越界。&lt;/p&gt;
+&lt;h3 id=&#34;链表&#34;&gt;链表
+&lt;/h3&gt;&lt;p&gt;链表的记录方式是维护一个进程P和空闲内存H的链表，每个链表包含指示标识(标识是P还是H)，起始地址，长度，下一个节点的指针。比如进程X，当进程X被终止后X处的位置被置为空闲内存，当两块空闲内存相连时，我们可以把两个链表节点合称为一个，这样链表节点少了一个但是获得了更大连续内存空间。有的链表甚至有双向指针，这样不仅能找到下一个节点的位置，还能方便的判断上一个节点的是P还是H确定是否能合并。&lt;/p&gt;
+&lt;p&gt;给链表分配内存的方法有多种&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;首次适配算法(first fit)
+沿着链表搜索，当找到足够大的空闲区域能容纳进程时，就将链表一分为二，一部分划分给进程使用，一部分新城新的H节点。对首次适配算法的改进是下次适配(next fit)算法，它的思想是不从头搜索，而是每次记录下搜索到的合适位置，下次搜索时从这个位置开始向下搜索，下次适配算法的性能略低于首次适配算法。&lt;/li&gt;
+&lt;li&gt;最佳适配(best fit)
+就是搜索整个链表，找到最接近进程需要内存大小的节点，将它分配给进程。但这么做很慢，而且会产生大量的无用的小内存区，因为它每次拆分的是最适合进程的内存区。事实上，因为这些无用的小内存区，最佳适配往往比首次适配浪费更多的内存。&lt;/li&gt;
+&lt;li&gt;最差适配(worst fit)
+和最大适配相反，就是它总是分配一个最大可用空闲区，这么做能避免产生大量小的内存区，但是大的连续内存块又被拆分了。仿真实验表示这也不是个好主意&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;分析上面4种算法，我们发现，如果将进程和空闲区分别用不同的链表表示，那么能极大的增加分配速率，比如分别用两个链表表示进程和空闲区，而且按照内存大小排序，那么要分配内存时，只需从小到大搜索节点，第一个遇到的节点就是最佳适配，也是首次适配(这时下次适配就没有意义了)。而且还节点中就不需要额外的表示是P还是H的标志了,但这么做的话释放/分配内存需要将一个链表的节点移动到另一个链表，这又比较慢。&lt;/p&gt;
+&lt;p&gt;还有一种分配算法叫做快速适配算法,它是将那些常用大小的内存区排序,并组织成链表,比如第一个节点是4K，第二个节点8K，第三个12K，以此类推。快速适配算法找到固定大小的内存时很快的，但是它的缺点也很明显，当进程终止时查看相邻快是否是空闲内存能否合并很慢，如果不合并，那么又会出现大量的无法利用的小空间&lt;/p&gt;
+&lt;h2 id=&#34;虚拟内存&#34;&gt;虚拟内存
+&lt;/h2&gt;&lt;p&gt;产生虚拟内存技术的背景就是内存不够用，储设备增长速度跟不上软件使用内存增长速度。除了上面说的交换技术，早期的解决方式是覆盖(overlay),将程序切分为几个段，称为覆盖块，比如一开始装入覆盖0，其他覆盖块在磁盘中。当覆盖0执行完毕就调入覆盖1。覆盖技术很复杂且不易掌握，需要程序员将程序切分成很多段，这对于大型程序尤其难接受。所以没过多久就诞生了虚拟内存技术。&lt;/p&gt;
+&lt;p&gt;虚拟内存是为每个程序划分自己的地址空间，这个空间被分为多个块，块称为页面(page)。每个page有连续的地址空间，并不是所有page都必须在内存中才能运行程序，当程序引用一部分在地址空间时，由硬件程序执行必要的映射。当映射的地址不在物理内存中时，由操作系统将缺失的部分装入物理内存并重新执行失败的指令。当程序等待内存调入时，还可以把CPU交给其他程序运行。&lt;/p&gt;
+&lt;h2 id=&#34;分页paging&#34;&gt;分页(paging)
+&lt;/h2&gt;&lt;p&gt;大部分虚拟内存都是用分页技术，程序产生的地址称为虚拟地址(virtual address)，这些虚拟地址构成了虚拟地址空间(virtual address space)。当进程访问虚拟地址时，不是将地址直接发送到内存总线，而是发送给内存管理单元MMU(memory management unit)。主流的MMU都是作为一个单独的芯片存在。(现代CPU，MMU则是CPU的一部分)&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/MMU%E5%92%8C%E6%80%BB%E7%BA%BF%E7%9A%84%E5%85%B3%E7%B3%BB.jpg&#34;
+	width=&#34;1988&#34;
+	height=&#34;936&#34;
+	srcset=&#34;http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/MMU%E5%92%8C%E6%80%BB%E7%BA%BF%E7%9A%84%E5%85%B3%E7%B3%BB_hu_9d0bc51d6662747d.jpg 480w, http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/MMU%E5%92%8C%E6%80%BB%E7%BA%BF%E7%9A%84%E5%85%B3%E7%B3%BB_hu_edb7e776cade55e5.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;MMU和总线的关系&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;212&#34;
+		data-flex-basis=&#34;509px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;虚拟地址按照固定大小的page划分为若干单元，物理内存中对应的单元被称为页框(page frame)。page的大小不等，4K-1G均可能，甚至可以不同大小的page混用。&lt;/p&gt;
+&lt;p&gt;看下面这个例子，page0对应的物理地址是8192-12287，那么当执行对page 0的操作时，比如mov reg 0，会被MMU转换成mov reg 8192。可以看到虚拟地址空间是大于物理地址的，当访问一个不存在物理地址的page时，cpu会进入缺页中断/缺页错误(page fault),这时操作系统会选择一个很少使用的页框，将他的内容写入磁盘，将这个page frame原先对应的page里的标记置为不在，表示不在物理内存中。将需要使用的page对应的页框装载进内存，并将这个page的标识置为在，表示在内存中。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E9%A1%B5%E8%A1%A8.jpg&#34;
+	width=&#34;1604&#34;
+	height=&#34;993&#34;
+	srcset=&#34;http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E9%A1%B5%E8%A1%A8_hu_91cb1c89f2b1a76f.jpg 480w, http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E9%A1%B5%E8%A1%A8_hu_aba1882dc32bcfb.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;虚拟内存页表&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;161&#34;
+		data-flex-basis=&#34;387px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h2 id=&#34;页表page-table&#34;&gt;页表(page table)
+&lt;/h2&gt;&lt;p&gt;页表是将页映射成页框的表格，比如对于一个16位的地址和4K的页，地址的高4位可以对应16个页，低12位可以对应在页中的偏移量，那么这么划分就可以表示出16个页表项，每个页表项对应4K的页框。实际上现代计算机的内存地址最大支持2^64^,主流的主板则是支持2^39^的地址，最大512G物理内存。好的主板甚至支持到了2^57^的内存，不要认为地址位只跟操作系统有关，识别这些地址需要主板的支持，简单的说，一位需要一根线去读取里面的信息。&lt;/p&gt;
+&lt;p&gt;下面是页表内一个页表项的内容，页表项的实现和操作系统有关，但大致相同，里面每一项除了包含页框号，还包含一个额外的标志位，比如在/不在标志位，保护(P)标志位，0表示可读，1表示可写，还有的实现P位用了3个位，还有个X位表示是否可运行。修改(M)位也被称为脏位(D)，表示是否被修改过，在重新分配内存时，如果一个页是修改过得，那么必须写回磁盘，否则直接丢弃即可。访问位(r REFERENCED)。还有禁止高速缓存位。从数学上看，页表是一个转换函数，输入是虚拟页号，输出物理地址，它取出页对应的页框地址(即页框号)，再加上虚拟地址上低位的偏移量，得到对应的物理地址。&lt;/p&gt;
+&lt;p&gt;实际的页表实现很复杂，叫多级页表后面会说。(虚拟机内的页表会更加复杂包含影子页表和嵌套页表，但这不是重点我们不讲)&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E9%A1%B5%E8%A1%A8%E9%A1%B9%E7%BB%93%E6%9E%84.jpg&#34;
+	width=&#34;1426&#34;
+	height=&#34;196&#34;
+	srcset=&#34;http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E9%A1%B5%E8%A1%A8%E9%A1%B9%E7%BB%93%E6%9E%84_hu_ea0e99d169b49bd2.jpg 480w, http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E9%A1%B5%E8%A1%A8%E9%A1%B9%E7%BB%93%E6%9E%84_hu_4be3af890fc0386b.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;页表项结构&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;727&#34;
+		data-flex-basis=&#34;1746px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;上面说的是大致原理，实际上去读虚拟地址时不会首先查找页表，而是查找MMU内的TLB(translation lookaside buffer页表的高速缓存，也叫做快表，存储最近转化的一些目录)，找不到再由table work unit去读取页表。在TLB里找不到需要查找的页表项时回去内存中查找页表，如果能找到，那这次时效称为软失效，如果内存里也不存在，那么称为硬失效，此时就需要操作系统从磁盘中读取页表调入内存，这种情况需要几毫秒的io，但在会对进程造成很大的延迟，它的处理时间是软失效的几百万倍。还有比硬失效更加严重的情况，比如引用了一个不存在的地址，这种情况称为段告错，属于程序错误。遍历页表的过程称为页表遍历。&lt;/p&gt;
+&lt;h3 id=&#34;多级页表&#34;&gt;多级页表
+&lt;/h3&gt;&lt;p&gt;实际上页表的实现多是多级页表的，即将地址的高位再做拆分。我们可以计算一下多级页表和普通页表各自占用的内存。假设地址都是32位的，每个page映射4k的页框，每个指向页框的页表项占4B(因为32位地址大小就是4B)&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E5%A4%9A%E7%BA%A7%E9%A1%B5%E8%A1%A8%E7%BB%93%E6%9E%84.jpg&#34;
+	width=&#34;1595&#34;
+	height=&#34;716&#34;
+	srcset=&#34;http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E5%A4%9A%E7%BA%A7%E9%A1%B5%E8%A1%A8%E7%BB%93%E6%9E%84_hu_8957e6a387c2efab.jpg 480w, http://localhost:1313/p/%E8%99%9A%E6%8B%9F%E5%86%85%E5%AD%98%E5%89%8D%E4%B8%96%E4%BB%8A%E7%94%9F/index.assets/%E5%A4%9A%E7%BA%A7%E9%A1%B5%E8%A1%A8%E7%BB%93%E6%9E%84_hu_59dfc9e35b02b94f.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;多级页表结构&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;222&#34;
+		data-flex-basis=&#34;534px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;假设页表不分级，就是只有一级页表，一级页表，那么总共可以有2^20^个一级页表地址，即2^20^个页表项，那么就需要1M * 4B = 4MB的地址存储页表，注意这只是一个进程的页表，每个进程都有自己的虚拟地址空间和页表。&lt;/p&gt;
+&lt;p&gt;如果是多级页表，下面这样，那么情况就会变化，首先需要2^10^个存放一级页表的地址(注意存放一级页表也是需要页表的)，每个一级页表对应2^10^个二级页表，那么总共就有2^20^个二级页表，对应1M个二级页表项。那么总的页表占用的内存就是1K * 4B+1M * 4B = 4.004MB&lt;/p&gt;
+&lt;p&gt;可以看到多级页表占用的内存反而变大了，但是实际上，多级页表是更省内存的，因为大部分程序用不到4G内存，那么这个进程一级页表对应的二级页表也就不分配，假设一级页表只使用了20%,那么只需要划分出20%的一级页表和对应的二级页表，就是&lt;/p&gt;
+&lt;p&gt;0.2 * 1K * 4B + 0.2 * 1M * 4B  = 0.8008MB,也就相当于4M内存的20%，这就节省了空间&lt;/p&gt;
+&lt;p&gt;实际上，除了结构上的省内存，二级页表也更加省内存，因为根据局部性原理，我们可以把一个二级页表里的相邻页都调入内存，其他间隔较远的内存存储在磁盘，这样就更省内存了。&lt;/p&gt;
+&lt;p&gt;其实我们看到在这里的页表的大小都是与逻辑地址的大小成正相关，而且多个进程会有多个页表，那有没有办法让页表不以逻辑地址的大小相关，而是以物理页的大小相关。这就是反向页表。(其他实现还有哈希页表)&lt;/p&gt;
+&lt;p&gt;以上说的是页表的结构，下面举一个例子来实际的体验虚拟地址和页表，以及物理地址的关系。&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;假设页面大小是4k = 2^12^字节，系统为32位&lt;/p&gt;
+&lt;p&gt;那么总共就需要2^20^个页表项，先不考虑多级页表。那就需要申请2^20^的数组arr，以数组的下标表示第几个页表项，每个页表项的长度32位，即4字节&lt;/p&gt;
+&lt;p&gt;对于虚拟内存地址4095来说，取前20位为页表项编号，得到0号页表项,arr[0],假设arr[0]对应的是10号物理页框，那么物理地址就是10 * 4096 + 4095，在计算物理地址的过程中，虚拟地址的前20位就是页框号，后12位就是偏移量。&lt;/p&gt;
+&lt;p&gt;那么此时每个页表项中只有20位是用来表示页框号的，还剩下12位未使用，我们可以使用这剩下的位来存储标志位。这样就充分利用了内存。&lt;/p&gt;
+&lt;p&gt;每个进程的页表其实是存储在PCB中的&lt;/p&gt;&lt;/blockquote&gt;
+&lt;h3 id=&#34;反向页表invert-page-table&#34;&gt;反向页表(invert page table)
+&lt;/h3&gt;&lt;p&gt;反向页表的思想是以物理页的页帧号(页框号)来查找逻辑页的页号，但是实际上我们在访问内存时还是需要在根据页号来找到页帧号（为什么我已经知道页帧号，还需要再找到一个页号？其实这里注意反向页表不是单独存在的，它还是要配合虚拟内存的的页式内存管理机制来存在的。也就是还是使用的虚拟内存地址来访问。我们根据反向页表能找到一个虚拟内存的页号，然后进程再使用虚拟内存的页号去访问），但是这个查找的过程很慢，只能顺着页框表不断遍历，找到对应页的逻辑页。反向页表实际占用空间举例&lt;/p&gt;
+&lt;blockquote&gt;
+&lt;p&gt;物理内存 16M&lt;/p&gt;
+&lt;p&gt;页面(页帧)大小 4K&lt;/p&gt;
+&lt;p&gt;页帧数4096 = 4k&lt;/p&gt;
+&lt;p&gt;页寄存器使用空间（8byte每个地址）8 * 4096 = 32k&lt;/p&gt;
+&lt;p&gt;页寄存器带来的额外开销32k/16m = 0.2%(约等于)。可以映射任意大小的虚拟内存 ，就算打开100个进程也只占用这点内存。&lt;/p&gt;&lt;/blockquote&gt;
+&lt;p&gt;但是很明显，如果每次访问内存都要遍历所有的页框表，那么肯定会影响进程性能，所以最好是将整个页表加载进TLB来加速页面查找。但是总会有不在内存的页面，也就是软失效。这时是需要知道怎么根据页号，来查找页帧号，只靠上面说的结构是做不到的，我们还需要额外的设计，比如关联存储器和相关存储器，这是种特殊的硬件，能够并行的查找页号的页帧号，设计复杂且关联内存昂贵而且如果关联存储器设计在CPU之外的话，很难做到在单个时钟周期内完成。&lt;/p&gt;
+&lt;h3 id=&#34;哈希页表&#34;&gt;哈希页表
+&lt;/h3&gt;&lt;p&gt;除了硬件的实现外，还有哈希的实现。哈希实现就是根据页号对应页帧号的hash函数,一般为了加速哈希函数的输入除了页号还有pid。当然使用哈希就存在哈希碰撞的问题，即两个虚拟地址对应一个页框地址。解决办法是将hash值相同的页表以拉链的方式连接在一起。(是不是和java里的拉链法hash函数的结构很像)&lt;/p&gt;
+&lt;p&gt;这种反向页表一般在高端的CPU比如PowerPC存在。哈希页表虽然减少了内存浪费但是增加查询时间和共享内存的难度。实际上哈希页表是结合在反向页表里来实现的。&lt;/p&gt;
+&lt;h2 id=&#34;end&#34;&gt;END
+&lt;/h2&gt;&lt;p&gt;下一期讲解一下虚拟内存的页面回收算法，大家多多点赞。&lt;/p&gt;
+</description>
+        </item>
+        <item>
+        <title>jvm调优前篇-prometheus监控系统</title>
+        <link>http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/</link>
+        <pubDate>Tue, 16 Jan 2024 00:00:00 +0000</pubDate>
+        
+        <guid>http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/</guid>
+        <description>&lt;img src="http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/cover.jpg" alt="Featured image of post jvm调优前篇-prometheus监控系统" /&gt;&lt;h1 id=&#34;背景&#34;&gt;背景
+&lt;/h1&gt;&lt;p&gt;基于前面的垃圾回收器的理论的学习，我们基本掌握了垃圾回收器的原理。但是这还不够，在实际的面试里，我们经常被问到的一个问题就是，&amp;ldquo;你说一下JVM调优思路&amp;rdquo;。为了弄明白JVM调优的思路，我们当然要实际操作一把，但是在真正开始调优之前，我们先学习一个新的技术，prometheus，它是我们接下来要学习JVM调优必须具备的技术。&lt;/p&gt;
+&lt;h1 id=&#34;prometheus简介&#34;&gt;prometheus简介
+&lt;/h1&gt;&lt;p&gt;简单概括prometheus是一个监控系统，能监控系统的各个指标。比如说我想知道一个接口的平均耗时是多少，最近一个小时内请求了多少次，成功了多少次。我需要一个系统能统计这个数据，并且把它展示出来，那么prometheus就是很好的解决方案。&lt;/p&gt;
+&lt;p&gt;当然prometheus之所以强大不仅仅是因为它功能强大，还因为它的生态强大。比如prometheus统计，聚合，查询服务器数据的能力很强，但是展示并不友好(实际上prometheus原生的展示界面非常简陋)，但是它可以和Grafana结合来展示数据。当我们的服务器发生异常时，我们希望根据prometheus的指标判断出来并且发出报警通知到我们，那么我们还可以使用AlertManager来配合prometheus发出告警。&lt;/p&gt;
+&lt;p&gt;总之prometheus是一套很强大的监控解决方案，大家记住这句话即可。&lt;/p&gt;
+&lt;h1 id=&#34;环境搭建&#34;&gt;环境搭建
+&lt;/h1&gt;&lt;p&gt;为了方便大家学习，我这里讲解一下怎么搭建虚拟机下prometheus单机环境。搭建环境是centos7&lt;/p&gt;
+&lt;h2 id=&#34;prometheus安装配置&#34;&gt;prometheus安装配置
+&lt;/h2&gt;&lt;p&gt;下载prometheus安装包。官网地址https://prometheus.io/download/。不会魔法的朋友可能打不开，不过我在文章末尾放出了所有的安装包资源，大家可以自取。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240117065036202.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1255&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240117065036202_hu_c2aa2dc52e1c4dd4.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240117065036202_hu_be60d79ba91f88b7.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240117065036202&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;203&#34;
+		data-flex-basis=&#34;489px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;为了方便我们管理，这里我设计一个统一的管理目录/opt/data/soft，方便后续一起管理其他软件。&lt;/p&gt;
+&lt;p&gt;下载完毕后，拷贝到/opt/data/soft/prometheus，&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;div class=&#34;chroma&#34;&gt;
+&lt;table class=&#34;lntable&#34;&gt;&lt;tr&gt;&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code&gt;&lt;span class=&#34;lnt&#34;&gt;1
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;2
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;3
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;4
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;5
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;6
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;7
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;8
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-shell&#34; data-lang=&#34;shell&#34;&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;c1&#34;&gt;# 创建目录&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;mkdir -p /opt/data/soft/prometheus
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;c1&#34;&gt;# 解压&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;tar -zxvf prometheus-2.49.1.linux-amd64.tar.gz
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;c1&#34;&gt;# 解压后进到解压目录里，尝试启动prometheus看看安装包坏没坏&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;./prometheus --storage.tsdb.path&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;&lt;span class=&#34;s2&#34;&gt;&amp;#34;/opt/data/soft/prometheus/data&amp;#34;&lt;/span&gt; --log.level&lt;span class=&#34;o&#34;&gt;=&lt;/span&gt;debug --web.enable-lifecycle --web.enable-admin-api
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;启动后访问网址看看页面能不能打开，这决定了后续数据能不能正确上报。&lt;/p&gt;
+&lt;p&gt;http://192.168.0.150:9090/&lt;/p&gt;
+&lt;p&gt;IP换成自己的IP。如果打不开，搜索centos7端口打不开的解决办法，比如关闭firewalld或者iptables。云服务器可能还要额外的设置，这个大家自视情况而定。&lt;/p&gt;
+&lt;p&gt;正常大家会看到这个页面，说明启动成功了。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240117071225964.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240117071225964_hu_cddba2f7d27f586e.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240117071225964_hu_2bf9af910f4e7ae1.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240117071225964&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h2 id=&#34;grafana安装配置&#34;&gt;grafana安装配置
+&lt;/h2&gt;&lt;p&gt;prometheus的原生界面展示的指标非常简陋，我们用grafana来展示prometheus的指标。去到官网下载https://grafana.com/grafana/download?pg=get&amp;amp;plcmt=selfmanaged-box1-cta1下载地址&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240118223426579.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240118223426579_hu_78125a33d29cb2e9.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240118223426579_hu_90b0d5d0ee2b4b5e.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240118223426579&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;下载后复制到/opt/data/soft/grafana目录，然后解压。命令如下&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;div class=&#34;chroma&#34;&gt;
+&lt;table class=&#34;lntable&#34;&gt;&lt;tr&gt;&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code&gt;&lt;span class=&#34;lnt&#34;&gt; 1
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 2
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 3
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 4
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 5
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 6
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 7
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 8
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 9
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;10
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-fallback&#34; data-lang=&#34;fallback&#34;&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;## 不能下载的可以在文章末尾找到我下好的软甲包
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;wget https://dl.grafana.com/enterprise/release/grafana-enterprise-10.2.3.linux-amd64.tar.gz
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;tar -zxvf grafana-enterprise-10.2.3.linux-amd64.tar.gz
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;#进到软件目录
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;#复制出一份配置文件，不需要更改里面的配置
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;cp conf/sample.ini conf/grafana.ini
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;#启动命令 
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;./bin/grafana-server -config conf/grafana.ini
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;启动后打开网页http://192.168.0.150:3000/login，应该能看到grafana的界面.grafana的默认用户密码都是admin，第一次登录会要求修改密码。我们为了方便直接还是改为admin&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240118224449070.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240118224449070_hu_6a841c7fc6d6ae1e.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240118224449070_hu_4783d291dad7c2a4.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240118224449070&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;进入grafana之后&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240118224725296.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240118224725296_hu_dcb1d67326044a71.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240118224725296_hu_e985ea78b4ff2fd8.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240118224725296&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h1 id=&#34;springboot项目整合prometheus&#34;&gt;SpringBoot项目整合Prometheus
+&lt;/h1&gt;&lt;p&gt;有了环境，我们还要有展示的指标，所以这里我搭建一个示例项目用来展示prometheus的指标用法。&lt;/p&gt;
+&lt;p&gt;maven依赖&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;div class=&#34;chroma&#34;&gt;
+&lt;table class=&#34;lntable&#34;&gt;&lt;tr&gt;&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code&gt;&lt;span class=&#34;lnt&#34;&gt;1
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;2
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;3
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;4
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;5
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;6
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;7
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;8
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;9
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-xml&#34; data-lang=&#34;xml&#34;&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;		&lt;span class=&#34;nt&#34;&gt;&amp;lt;dependency&amp;gt;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;			&lt;span class=&#34;nt&#34;&gt;&amp;lt;groupId&amp;gt;&lt;/span&gt;io.micrometer&lt;span class=&#34;nt&#34;&gt;&amp;lt;/groupId&amp;gt;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;			&lt;span class=&#34;nt&#34;&gt;&amp;lt;artifactId&amp;gt;&lt;/span&gt;micrometer-registry-prometheus&lt;span class=&#34;nt&#34;&gt;&amp;lt;/artifactId&amp;gt;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;			&lt;span class=&#34;nt&#34;&gt;&amp;lt;scope&amp;gt;&lt;/span&gt;runtime&lt;span class=&#34;nt&#34;&gt;&amp;lt;/scope&amp;gt;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;		&lt;span class=&#34;nt&#34;&gt;&amp;lt;/dependency&amp;gt;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;		&lt;span class=&#34;nt&#34;&gt;&amp;lt;dependency&amp;gt;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;			&lt;span class=&#34;nt&#34;&gt;&amp;lt;groupId&amp;gt;&lt;/span&gt;org.springframework.boot&lt;span class=&#34;nt&#34;&gt;&amp;lt;/groupId&amp;gt;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;			&lt;span class=&#34;nt&#34;&gt;&amp;lt;artifactId&amp;gt;&lt;/span&gt;spring-boot-starter-actuator&lt;span class=&#34;nt&#34;&gt;&amp;lt;/artifactId&amp;gt;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;		&lt;span class=&#34;nt&#34;&gt;&amp;lt;/dependency&amp;gt;&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;application配置&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;div class=&#34;chroma&#34;&gt;
+&lt;table class=&#34;lntable&#34;&gt;&lt;tr&gt;&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code&gt;&lt;span class=&#34;lnt&#34;&gt; 1
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 2
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 3
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 4
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 5
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 6
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 7
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 8
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 9
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;10
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;11
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;12
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;13
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;14
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-yaml&#34; data-lang=&#34;yaml&#34;&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;nt&#34;&gt;management&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;  &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;endpoints&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;    &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;web&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;      &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;base-path&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;l&#34;&gt;/actuator&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;      &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;exposure&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;        &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;include&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;l&#34;&gt;prometheus&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;  &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;server&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;    &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;port&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;m&#34;&gt;8113&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;  &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;metrics&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;    &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;export&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;      &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;prometheus&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;        &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;enabled&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;kc&#34;&gt;true&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;    &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;tags&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;      &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;application&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;l&#34;&gt;${spring.application.name}&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;然后启动服务，访问接口http://192.168.66.120:8113/actuator/prometheus，如果能看到展示的指标说明配置正确。&lt;/p&gt;
+&lt;p&gt;这里我们就搭建起来了prometheus的使用环境，具体的指标用法在后面。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120114752660.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120114752660_hu_697f5e6b49a63b4f.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120114752660_hu_c3cb6421b0b38996.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120114752660&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h1 id=&#34;prometheus配置拉指标数据源&#34;&gt;prometheus配置拉指标数据源
+&lt;/h1&gt;&lt;p&gt;peometheus会定期去拉取服务器的指标数据，所以我们还要在prometheus上配置需要拉取指标的服务地址。&lt;/p&gt;
+&lt;p&gt;去到prometheus的安装目录，在prometheus.yml文件里更改配置，添加我们要采集的spring服务地址&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;div class=&#34;chroma&#34;&gt;
+&lt;table class=&#34;lntable&#34;&gt;&lt;tr&gt;&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code&gt;&lt;span class=&#34;lnt&#34;&gt; 1
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 2
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 3
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 4
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 5
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 6
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 7
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 8
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt; 9
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;10
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;11
+&lt;/span&gt;&lt;span class=&#34;lnt&#34;&gt;12
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-yaml&#34; data-lang=&#34;yaml&#34;&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;nt&#34;&gt;global&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;  &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;scrape_interval&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;l&#34;&gt;5s&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;c&#34;&gt;# 全局的采集数据周期&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;  &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;evaluation_interval&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;l&#34;&gt;15s&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;c&#34;&gt;# Evaluate rules every 15 seconds. The default is every 1 minute.&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;  &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;scrape_timeout&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;l&#34;&gt;15s&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;c&#34;&gt;# 全局的采集超时时间&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;&lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;scrape_configs&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;  &lt;/span&gt;- &lt;span class=&#34;nt&#34;&gt;job_name&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;s2&#34;&gt;&amp;#34;prometheus-demo&amp;#34;&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;    &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;scrape_interval&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;l&#34;&gt;10s&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;c&#34;&gt;#本采集任务的采集数据周期 &lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;    &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;scrape_timeout&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;l&#34;&gt;20s&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;c&#34;&gt;#本采集任务的超时时间&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;    &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;metrics_path&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;s1&#34;&gt;&amp;#39;/actuator/prometheus&amp;#39;&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;    &lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;static_configs&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;w&#34;&gt;      &lt;/span&gt;- &lt;span class=&#34;nt&#34;&gt;targets&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;:&lt;/span&gt;&lt;span class=&#34;w&#34;&gt; &lt;/span&gt;&lt;span class=&#34;p&#34;&gt;[&lt;/span&gt;&lt;span class=&#34;s1&#34;&gt;&amp;#39;192.168.66.120:8113&amp;#39;&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;]&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;拉取成功后打开prometheus的web界面，找到我们配置的spring服务，看是不是成功被采集到了&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120125905232.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1255&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120125905232_hu_d4dad432d709e40c.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120125905232_hu_6f76adce5161b4db.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120125905232&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;203&#34;
+		data-flex-basis=&#34;489px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h1 id=&#34;prometheus语法&#34;&gt;prometheus语法
+&lt;/h1&gt;&lt;h2 id=&#34;指标的格式&#34;&gt;指标的格式
+&lt;/h2&gt;&lt;p&gt;下面是一个指标的典型格式。custom_message_length_total是指标名字，大括号内的内容被称为labels，labels内有3个标签，同样的指标名字，标签不一样，也是不一样的指标。最后的5.0表示指标的值。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;div class=&#34;chroma&#34;&gt;
+&lt;table class=&#34;lntable&#34;&gt;&lt;tr&gt;&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code&gt;&lt;span class=&#34;lnt&#34;&gt;1
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-json&#34; data-lang=&#34;json&#34;&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;err&#34;&gt;custom_message_length_total&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;&lt;span class=&#34;err&#34;&gt;application=&lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;&amp;#34;prometheus_study&amp;#34;&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt;&lt;span class=&#34;err&#34;&gt;message_length=&lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;&amp;#34;10&amp;#34;&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt;&lt;span class=&#34;err&#34;&gt;message_time=&lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;&amp;#34;2024-01-20&amp;#34;&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,}&lt;/span&gt; &lt;span class=&#34;mf&#34;&gt;5.0&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;prometheus有4中指标，我们分别介绍&lt;/p&gt;
+&lt;h2 id=&#34;counter&#34;&gt;Counter
+&lt;/h2&gt;&lt;p&gt;Counter是一个只增不减的指标，可以用counter来记录服务的请求数，已完成的任务数，发生错误的次数等。通过labels指定标签，inc方法增加次数，或者add(float)增加指定次数。&lt;/p&gt;
+&lt;p&gt;一个label指标例子。我们统计一天收到消息条数，并根据消息的长度做区分。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120142914839.jpg&#34;
+	width=&#34;1981&#34;
+	height=&#34;400&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120142914839_hu_ecb82fddbec5e9a8.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120142914839_hu_6ce12fee5847614c.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120142914839&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;495&#34;
+		data-flex-basis=&#34;1188px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;指标格式&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;div class=&#34;chroma&#34;&gt;
+&lt;table class=&#34;lntable&#34;&gt;&lt;tr&gt;&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code&gt;&lt;span class=&#34;lnt&#34;&gt;1
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-json&#34; data-lang=&#34;json&#34;&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;err&#34;&gt;custom_message_length_total&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;{&lt;/span&gt;&lt;span class=&#34;err&#34;&gt;application=&lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;&amp;#34;prometheus_study&amp;#34;&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt;&lt;span class=&#34;err&#34;&gt;message_length=&lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;&amp;#34;5&amp;#34;&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,&lt;/span&gt;&lt;span class=&#34;err&#34;&gt;message_time=&lt;/span&gt;&lt;span class=&#34;nt&#34;&gt;&amp;#34;2024-01-20&amp;#34;&lt;/span&gt;&lt;span class=&#34;p&#34;&gt;,}&lt;/span&gt; &lt;span class=&#34;mf&#34;&gt;4.0&lt;/span&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;访问spring的指标暴露接口 http://192.168.66.120:8113/actuator/prometheus&lt;/p&gt;
+&lt;p&gt;可以看到我们的自定义的指标&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120143046371.jpg&#34;
+	width=&#34;1997&#34;
+	height=&#34;499&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120143046371_hu_ae95036df4c14039.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120143046371_hu_ca78c30e7ca33694.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120143046371&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;400&#34;
+		data-flex-basis=&#34;960px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h2 id=&#34;gauge&#34;&gt;Gauge
+&lt;/h2&gt;&lt;p&gt;仪表盘代表一种可以随意变化的指标，比如内存使用率这种指标，或者并发请求数量。也是使用labels来指定标签名称。&lt;/p&gt;
+&lt;p&gt;注意这个值时随时间变化的，而且两次记录之间有可能丢失数据，随着时间周期的粒度变大，丢失关键变化的情况会增多。&lt;/p&gt;
+&lt;p&gt;我们设计一个队列存储所有收到的消息。然后用guage记录队列里消息的条数。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120150708805.jpg&#34;
+	width=&#34;1825&#34;
+	height=&#34;789&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120150708805_hu_d7feebd8362c7fe0.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120150708805_hu_9a0884dc69bb1440.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120150708805&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;231&#34;
+		data-flex-basis=&#34;555px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;从http://192.168.66.120:8113/actuator/prometheus 里查看我们队列里消息的条数，显示有5条。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120150632493.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120150632493_hu_5a17ef051b4ced2a.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120150632493_hu_70a04a43422ccfb0.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120150632493&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;我们发送一条remove指令，然后发现队列里消息的条数变少了&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120151442825.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120151442825_hu_cdd4b90f79fac11c.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120151442825_hu_3b9556593bf54aff.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120151442825&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h2 id=&#34;histogram&#34;&gt;Histogram
+&lt;/h2&gt;&lt;p&gt;直方图，它其实是将指标按照一定的规则分组后的指标。label中的标签就是分组的规则。每个创建的指标后面就会存在一个&amp;quot;指标名__histogram&amp;quot;的指标，表示分组后的结果。&lt;/p&gt;
+&lt;p&gt;这里我用Histogram来统计接口耗时&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120161338402.jpg&#34;
+	width=&#34;1862&#34;
+	height=&#34;652&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120161338402_hu_ea07af37b666b357.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120161338402_hu_ad33c0a9e5c95d21.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120161338402&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;285&#34;
+		data-flex-basis=&#34;685px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;可以看到，统计出耗时在50ms以下的请求有1个，100ms以下有2个，200ms以下5个，500ms以下12个，1000ms以下17个。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120161417738.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120161417738_hu_61776e2d6480e235.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120161417738_hu_fb05e57e3d6518.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120161417738&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;细心的读者肯定发现了，除了HistogramName_Hitogram指标外，还有 HistogramName_seconds_bucket这种指标。这两者其实是一个指标，只是表示形式不一样，大家可以对照着看指标值是不是都一样。 HistogramName_Hitogram是把每个labels对应的标签分配进bucket，bucket分组就是我们设置的分组规则。实际记录的值除了每个HistogramName_bucket指标外还存在HistogramName_count和HistogramName_sum，分别表示所有观测到的事件总次数和观测到的事件的值的和。在HistogramName_bucket中当上界le为+Inf时，它的值为所有接受到的事件次数，这个结果就和HistogramName_Count一样了。&lt;/p&gt;
+&lt;h2 id=&#34;summary&#34;&gt;Summary
+&lt;/h2&gt;&lt;p&gt;Summary的含义和Histogram表达的含义一样，都是对指标进行聚合后的展示。但是Summary在一些计算时会直接在客户端计算，而Histogram则是在服务端计算，比如计算一个指标的中位数。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120165930047.jpg&#34;
+	width=&#34;1794&#34;
+	height=&#34;877&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120165930047_hu_ce70e1e8c8a91f2.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120165930047_hu_447fb760ae6909ff.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120165930047&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;204&#34;
+		data-flex-basis=&#34;490px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;可以看到Summary指标和Histogram指标的统计结果完全一样&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120165845376.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120165845376_hu_8e32177077697545.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120165845376_hu_211bb41229826878.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120165845376&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h2 id=&#34;promql&#34;&gt;PromQL
+&lt;/h2&gt;&lt;p&gt;我们的指标其实是存储在prometheus服务器上的，以上所有指标都有对应的函数，和语法配合函数可以更准确的展示出对应的数据变化规律。专门操作prometheus指标的语法就是PromQL。&lt;/p&gt;
+&lt;p&gt;接下来我们介绍如何使用PromQL更好的展示指标。&lt;/p&gt;
+&lt;p&gt;我们知道custom_message_send_cost_time_histogram指标代表每个耗时阶段的请求个数。比如这里耗时200ms以下的请求1个，耗时500ms以下的请求7个，那么耗时100ms - 500ms之间的请求有多少个呢，虽然我们口算也可以，但是数据量很大时明显就不能口算了。我们用PromQL计算一下。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120171405245.jpg&#34;
+	width=&#34;1725&#34;
+	height=&#34;540&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120171405245_hu_9835e1c7608cb0d.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120171405245_hu_fd1acebe58881060.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120171405245&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;319&#34;
+		data-flex-basis=&#34;766px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;去到http://192.168.66.69:9090/graph输入计算函数。&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;div class=&#34;chroma&#34;&gt;
+&lt;table class=&#34;lntable&#34;&gt;&lt;tr&gt;&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code&gt;&lt;span class=&#34;lnt&#34;&gt;1
+&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;
+&lt;td class=&#34;lntd&#34;&gt;
+&lt;pre tabindex=&#34;0&#34; class=&#34;chroma&#34;&gt;&lt;code class=&#34;language-yaml&#34; data-lang=&#34;yaml&#34;&gt;&lt;span class=&#34;line&#34;&gt;&lt;span class=&#34;cl&#34;&gt;&lt;span class=&#34;l&#34;&gt;scalar(custom_message_send_cost_time_histogram{application=&amp;#34;prometheus_study&amp;#34;,le=&amp;#34;0.5&amp;#34;,})-scalar(custom_message_send_cost_time_histogram{application=&amp;#34;prometheus_study&amp;#34;,le=&amp;#34;0.2&amp;#34;,})&lt;/span&gt;&lt;span class=&#34;w&#34;&gt;
+&lt;/span&gt;&lt;/span&gt;&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/td&gt;&lt;/tr&gt;&lt;/table&gt;
+&lt;/div&gt;
+&lt;/div&gt;&lt;p&gt;可以看到展示的计算结果是6&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120171549504.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120171549504_hu_cb730c481e306ad0.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120171549504_hu_54812d1ede4872c7.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120171549504&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;PromQL的功能很强大，函数也很丰富，大家感兴趣自己在去了解。&lt;/p&gt;
+&lt;h1 id=&#34;grafana接入prometheus&#34;&gt;Grafana接入prometheus
+&lt;/h1&gt;&lt;p&gt;上面我们可以看到，prometheus展示的界面太丑了，我们一开始介绍了grafana是用来替换prometheus展示数据的，这里介绍下怎么用Grafana接入Prometheus。&lt;/p&gt;
+&lt;h2 id=&#34;接入prometheus数据源&#34;&gt;接入prometheus数据源
+&lt;/h2&gt;&lt;p&gt;进入主界面选择接入prometheus数据源&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120195338849.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120195338849_hu_fb76dc98be75ca8a.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120195338849_hu_7a0cece1af8ad771.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120195338849&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;选创建新数据源&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120195402635.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120195402635_hu_d515298b7f80a3fc.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120195402635_hu_b042be13d96be9d1.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120195402635&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;填好数据源名字和prometheus的访问地址后保存&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120195548854.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120195548854_hu_3c36017534392f7e.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120195548854_hu_4c773f5e4cf17949.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120195548854&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h2 id=&#34;创建自定义面板&#34;&gt;创建自定义面板
+&lt;/h2&gt;&lt;p&gt;创建新看板&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120195938838.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120195938838_hu_26c03021e8b2f314.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120195938838_hu_632c40152c8e22c6.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120195938838&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200015532.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200015532_hu_e58edf32e8164f09.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200015532_hu_c4660569eee3ba39.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120200015532&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;数据源选我们刚才新建的prometheus-demo&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200052764.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200052764_hu_725a99950a7899b6.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200052764_hu_e06ac977a66337b2.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120200052764&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;还要再选一遍数据源&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200424237.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200424237_hu_ea9974b86067db17.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200424237_hu_683c3058f2636c95.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120200424237&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;我这里选择我们创建的记录接口耗时的指标custom_message_send_cost_time_histogram&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200509660.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200509660_hu_45b535565aee8a63.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200509660_hu_f30a114a934f8635.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120200509660&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;label里的标签也得选，然后预览。然后保存&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200612651.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200612651_hu_259cdd364da9f483.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200612651_hu_91f698dd7955ef0c.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120200612651&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200717059.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200717059_hu_8093155faf205e66.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200717059_hu_a632c205654e9895.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120200717059&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;到这里，我们自己创建的指标就可以展示了。最终结果&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200735790.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200735790_hu_23337bb3533e49a.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120200735790_hu_3ad04b37d61c68b2.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120200735790&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h2 id=&#34;导入预设面板&#34;&gt;导入预设面板
+&lt;/h2&gt;&lt;p&gt;从上面的创建步骤来看，创建一个面板还是不简单，而且如果我们要用一些PromQL来创建面板时，那步骤会更加复杂。而且我们的Spring项目有那么多指标，总不能全部都由我们新建吧，所以我们还要学会导入其他人开发好的面板。&lt;/p&gt;
+&lt;p&gt;好在Spring有非常好的生态，社区里已经有人建好了一套Spring程序的面板，里面包含了大部分常用的监控指标，我们可以直接导入。&lt;/p&gt;
+&lt;p&gt;模板官网 &lt;a class=&#34;link&#34; href=&#34;https://grafana.com/grafana/dashboards/&#34;  target=&#34;_blank&#34; rel=&#34;noopener&#34;
+    &gt;https://grafana.com/grafana/dashboards/&lt;/a&gt;&lt;/p&gt;
+&lt;p&gt;找到任意的我们想要下载的模板，下载JSON配置&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120201700458.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120201700458_hu_cc62774817c38fa5.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120201700458_hu_5abf76a884c7a4f1.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120201700458&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;在看板界面选择导入我们想要的看板&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120201812667.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120201812667_hu_90f7d70b611bf8bd.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120201812667_hu_12fb4b24140d421b.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120201812667&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;导入时数据源选择我们创建的prometheus-demo&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120201915045.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120201915045_hu_a089c26d223e29fa.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120201915045_hu_b38806ee27957b19.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120201915045&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;保存后就能看到我们想要的看板&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120202704927.jpg&#34;
+	width=&#34;2560&#34;
+	height=&#34;1230&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120202704927_hu_96887d11f0066b24.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120202704927_hu_5448eadc592c0ae9.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120202704927&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;208&#34;
+		data-flex-basis=&#34;499px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;这里我推荐一个看板4701，这个看板是监控JVM信息的，用我们配置的Spring项目就可以展示。&lt;/p&gt;
+&lt;p&gt;这个面板非常全面，是我们后续讲JVM调优实践必须要用的。我替大大家下好了。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120203226105.jpg&#34;
+	width=&#34;1656&#34;
+	height=&#34;700&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120203226105_hu_256f05bdd59480bd.jpg 480w, http://localhost:1313/p/jvm%E8%B0%83%E4%BC%98%E5%89%8D%E7%AF%87-prometheus%E7%9B%91%E6%8E%A7%E7%B3%BB%E7%BB%9F/index.assets/image-20240120203226105_hu_16750ebe46000976.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240120203226105&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;236&#34;
+		data-flex-basis=&#34;567px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;还有一些监控服务器状态的看板，不过需要安装额外的指标采集程序，我就不演示了。也不是重点，大家知道就行了。&lt;/p&gt;
+&lt;h1 id=&#34;end&#34;&gt;END
+&lt;/h1&gt;&lt;p&gt;到这里关于prometheus的知识就讲完了，prometheus是后面JVM调优实施的必要条件，大家一定要掌握。另外本文所有用到的资源，配置，以及代码我已经打包好了，大家在不会魔法就自己下载然后照着操作就行。&lt;/p&gt;
+</description>
+        </item>
+        <item>
+        <title>jvm垃圾回收器对象分配规则</title>
+        <link>http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%AF%B9%E8%B1%A1%E5%88%86%E9%85%8D%E8%A7%84%E5%88%99/</link>
+        <pubDate>Sun, 14 Jan 2024 00:00:00 +0000</pubDate>
+        
+        <guid>http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%AF%B9%E8%B1%A1%E5%88%86%E9%85%8D%E8%A7%84%E5%88%99/</guid>
+        <description>&lt;img src="http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%AF%B9%E8%B1%A1%E5%88%86%E9%85%8D%E8%A7%84%E5%88%99/index.assets/cover.jpg" alt="Featured image of post jvm垃圾回收器对象分配规则" /&gt;&lt;h1 id=&#34;背景&#34;&gt;背景
+&lt;/h1&gt;&lt;p&gt;了解垃圾回收器，除了要知道垃圾回收器的工作原理，我们还要想一个问题，垃圾回收器的垃圾是怎么产生的。所以本期我们讲解一些垃圾回收器的对象内存分配原则。结合这些分配原则，帮助大家在面试时能更好的和面试官吹牛皮。&lt;/p&gt;
+&lt;h1 id=&#34;分配规则&#34;&gt;分配规则
+&lt;/h1&gt;&lt;p&gt;先说一个大的原则，一般的对象会被分配在新生代Eden区，然后经过垃圾回收存活一定时间后进入老年代。这个原则也符合我们的对内存的分带收集理论。但是并不绝对，有一些特例。下面我将讲解这些特例。&lt;/p&gt;
+&lt;h2 id=&#34;大对象直接进入老年代&#34;&gt;大对象直接进入老年代
+&lt;/h2&gt;&lt;p&gt;所谓大对象，就是指很长的字符串或者元素众多的数组。大对象的分配需要连续的内存空间，如果直接分配在新生代，那么在新生代垃圾回收时需要反复的拷贝这个对象，而反复的大内存的拷贝会严重影响GC性能。实际上，垃圾回收过程里，最耗时的就是内存的拷贝过程。所以为了避免这个问题，JVM要求超过一定容量的对象直接分配在老年代，使用参数-XX：PretenureSizeThreshold设置，这个参数的单位是字节数。&lt;/p&gt;
+&lt;h2 id=&#34;长期存活的对象直接进入老年代&#34;&gt;长期存活的对象直接进入老年代
+&lt;/h2&gt;&lt;p&gt;当对象经过一定的生存周期，那么对象就可以从新生代晋升为老年代，这个规则是显而易见的，JVM默认是存活15次GC的对象会晋升老念叨。可以使用JVM参数-XX： MaxTenuringThreshold设置。&lt;/p&gt;
+&lt;h2 id=&#34;动态年龄&#34;&gt;动态年龄
+&lt;/h2&gt;&lt;p&gt;我们知道JVM是很&amp;quot;聪明&amp;quot;的，能够自适应的调节一些参数。对象晋升老年代也是，如果一次S区中，某个年龄的对象占据S区的一半，那么年龄大于等于该年龄的对象，直接晋升老年代。&lt;/p&gt;
+&lt;h2 id=&#34;内存分配担保&#34;&gt;内存分配担保
+&lt;/h2&gt;&lt;p&gt;所谓内存担保，是指在老年代预留出内存保证新生代的垃圾回收能够进行。&lt;/p&gt;
+&lt;p&gt;在发生Minor GC之前，虚拟机会检查老年代最大可用连续空间是否大于新生代所有对象总空间，如果成立，那么Minor GC就是安全的。否则就检查是否允许担保失败，如果允许再检查老年代最大可用连续空间是否大于历次晋升到老年代对象的平均大小，如果大于，则发生Monir GC，如果小于，或者之前设置不允许担保失败，就发生Full GC。&lt;/p&gt;
+&lt;p&gt;之所以要这么做，是因为存在一种情况，假设Minor GC时，Eden区所有对象都是存活的，需要拷贝到S区，而S区的容量我们知道是不足以容纳Eden区的的，所以需要把对象拷贝到老年代。如果这时老年代没有足够的内存空间，那么本次GC就会失败，所以需要内存分配担保机制。&lt;/p&gt;
+&lt;h1 id=&#34;对象分配流程&#34;&gt;对象分配流程
+&lt;/h1&gt;&lt;p&gt;了解了上面说的这些规则之后，我们再来看一下一个对象被分配内存的流程是怎样的。先介绍一些需要了解的技术点。&lt;/p&gt;
+&lt;h2 id=&#34;tlab&#34;&gt;TLAB
+&lt;/h2&gt;&lt;p&gt;全程Thread Local Allocation Buffer，线程如果直接访问堆内存会产生竞争，为了减少竞争，即每个线程私有的一块堆内存，处于新生代。在前面的垃圾回收器章节有介绍。&lt;/p&gt;
+&lt;h2 id=&#34;逃逸分析&#34;&gt;逃逸分析
+&lt;/h2&gt;&lt;p&gt;逃逸分析是一种编译器的优化技术，简单的说，对象的内存需要在堆内存上分配，但是如果可以将对象的内存分配在栈上，那么就可以省去去堆内存申请的必要。但是栈是很稀有的资源，不能随便分配(至于栈为什么快，其实涉及到操作系统的原理，不是我们了解的重点)。那么那些对象可以分配在栈里呢，就是经过逃逸分析的对象。&lt;/p&gt;
+&lt;p&gt;逃逸分析的规则是，如果一个对象只在栈内创建，并不会把对象引用传递到栈外，那么对象就可以在栈内创建。简单的说，一个对对象只在方法内部被创建并且使用，而不会传递到方法外部，那么对象就是通过了逃逸分析。&lt;/p&gt;
+&lt;h2 id=&#34;分配流程概述&#34;&gt;分配流程概述
+&lt;/h2&gt;&lt;p&gt;经过前面的介绍，我们来概括一下对象的分配规则。&lt;/p&gt;
+&lt;p&gt;对象分配时，先经过编译器的逃逸分析优化，如果对象未逃逸，那么直接分配在栈上。否则，分配在堆上。在分配时，根据对象需要的内存大小判断是不是一个大对象，不是就分配在TLAB里，否则直接进入老年代。因为TLAB是属于新生代的内存区域，当新生代的对象生存一定时间后就进入老年代。当对象使用完毕后就被销毁。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%AF%B9%E8%B1%A1%E5%88%86%E9%85%8D%E8%A7%84%E5%88%99/index.assets/%E5%AF%B9%E8%B1%A1%E5%88%86%E9%85%8D%E8%A7%84%E5%88%99.jpg&#34;
+	width=&#34;2496&#34;
+	height=&#34;1215&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%AF%B9%E8%B1%A1%E5%88%86%E9%85%8D%E8%A7%84%E5%88%99/index.assets/%E5%AF%B9%E8%B1%A1%E5%88%86%E9%85%8D%E8%A7%84%E5%88%99_hu_568653d73a860050.jpg 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%AF%B9%E8%B1%A1%E5%88%86%E9%85%8D%E8%A7%84%E5%88%99/index.assets/%E5%AF%B9%E8%B1%A1%E5%88%86%E9%85%8D%E8%A7%84%E5%88%99_hu_b41ea39bda47e238.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;对象分配规则&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;205&#34;
+		data-flex-basis=&#34;493px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h1 id=&#34;end&#34;&gt;end
+&lt;/h1&gt;&lt;p&gt;文章简介&lt;/p&gt;
+&lt;p&gt;jvm对象分配的规则介绍，包含&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;大对象分配规则&lt;/li&gt;
+&lt;li&gt;对象晋升规则&lt;/li&gt;
+&lt;li&gt;内存分配担保&lt;/li&gt;
+&lt;li&gt;逃逸分析&lt;/li&gt;
+&lt;li&gt;内存分配流程&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;双非鼠鼠，3年小厂经验，立志通过系统的自学进大厂。公众号同名，代码及资源都在公众号上。&lt;/p&gt;
+</description>
+        </item>
+        <item>
+        <title>jvm垃圾回收器后篇</title>
+        <link>http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/</link>
+        <pubDate>Sun, 31 Dec 2023 00:00:00 +0000</pubDate>
+        
+        <guid>http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/</guid>
+        <description>&lt;img src="http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/cover.jpg" alt="Featured image of post jvm垃圾回收器后篇" /&gt;&lt;h1 id=&#34;学习背景&#34;&gt;学习背景
+&lt;/h1&gt;&lt;p&gt;经过了垃圾回收器的理论学习，我们基本掌握了垃圾回收器的一些基本思想。但是想达到能随便应对面试的情况还不够，我们还需要了解一些具体的垃圾回收器的执行过程，以此来让面试官感觉耳目一新。如果没看过垃圾回收器理论的朋友可以看一下我的上一篇文章。&lt;/p&gt;
+&lt;h1 id=&#34;垃圾回收器介绍&#34;&gt;垃圾回收器介绍
+&lt;/h1&gt;&lt;h2 id=&#34;g1garbage-first垃圾回收器&#34;&gt;G1(Garbage First)垃圾回收器
+&lt;/h2&gt;&lt;p&gt;G1垃圾收集器在JDK7被开发出来，JDK8功能基本完全实现。并且成功替换掉了Parallel Scavenge成为了服务端模式下默认的垃圾收集器。对比起另外一个垃圾回收器CMS，G1不仅能提供能提供规整的内存，而且能够实现可预测的停顿，能够将垃圾回收时间控制在N毫秒内。这种“可预测的停顿”和高吞吐量特性让G1被称为&amp;quot;功能最全的垃圾回收器&amp;quot;。&lt;/p&gt;
+&lt;p&gt;G1同时回收新生代和老年代，但是分别被称为G1的Young GC模式和Mixed GC模式。这个特性来源于G1独特的内存布局，内存分配不再严格遵守新生代，老年代的划分，而是以Region为单位，G1跟踪各个Region的并且维护一个关于Region的优先级列表。在合适的时机选择合适的Region进行回收。这种基于Region的内存划分为一些巧妙的设计思想提供了解决停顿时间和高吞吐的基础。接下来我们将详细讲解G1的详细垃圾回收过程和里面可圈可点的设计。&lt;/p&gt;
+&lt;h3 id=&#34;region内存划分&#34;&gt;Region内存划分
+&lt;/h3&gt;&lt;p&gt;G1将堆划分为一系列大小不等的内存区域，称为Region(单词语义范围，地区，接下来我简述为分区)。每个region为1-32M，都是2的n次幂。在分代垃圾回收算法的思想下，region逻辑上划分为Eden，Survivor和老年代。每个分区都可能是eden区，Survivor区也可能是old区，但在一个时刻只能是一种分区。各种角色的region个数都是不固定的，这说明每个代的内存也是不固定的。这些region在逻辑上是连续的，而不是物理上连续，这点和之前的young/old区物理连续很不一样。&lt;/p&gt;
+&lt;p&gt;除了前面说的Eden区，Survivor区，old区，G1中还有一种特殊的分区，Humongous区。Humongous用于存放大对象。当一个对象的容量超过了Region大小的一半，就会把这个对象放进Humongous分区，因为如果对一个短期存在的大对象使用复制算法回收的话，复制成本非常高。而直接放进old区则导致原本应该短期存在的对象占用了老年代的内存，更加不利于回收性能。如果一个对象的大小超过了一个Region的大小，那么就需要找到连续的Humogous分区来存放这个大对象。有时候因为找不到连续的Humogous分区甚至不得不开启Full GC。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/region%E5%B8%83%E5%B1%80-1755072180997.png&#34;
+	width=&#34;2245&#34;
+	height=&#34;1030&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/region%E5%B8%83%E5%B1%80-1755072180997_hu_d18785eda8e5a95d.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/region%E5%B8%83%E5%B1%80-1755072180997_hu_b8c9c684bad430ff.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;region布局&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;217&#34;
+		data-flex-basis=&#34;523px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h3 id=&#34;region内部结构&#34;&gt;Region内部结构
+&lt;/h3&gt;&lt;h4 id=&#34;card-table卡表&#34;&gt;Card Table卡表
+&lt;/h4&gt;&lt;p&gt;Card Table是Region的内部结构划分。每个region内部被划分为若干的内存块，被称为card。这些card集合被称为card table，卡表。&lt;/p&gt;
+&lt;p&gt;比如下面的例子，region1中的内存区域被划分为9块card，9块card的集合就是卡表card table。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E5%8D%A1%E8%A1%A8-1755072180997.png&#34;
+	width=&#34;1988&#34;
+	height=&#34;1771&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E5%8D%A1%E8%A1%A8-1755072180997_hu_84566f6414b0c73a.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E5%8D%A1%E8%A1%A8-1755072180997_hu_d0883803a9b2ed06.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;卡表&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;112&#34;
+		data-flex-basis=&#34;269px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h4 id=&#34;rset记忆集合&#34;&gt;Rset记忆集合
+&lt;/h4&gt;&lt;p&gt;除了卡表，每个region中都含有Remember Set，简称RSet。RSet其实是hash表，key为引用本region的其他region起始地址，value为本region中被key对应的region引用的card索引位置。&lt;/p&gt;
+&lt;p&gt;这里必须讲解一下RSet存在的原因，RSet是为了解决&amp;quot;跨代引用&amp;quot;。想象一下，一个新生代对象被老年代对象引用，那么为了通过引用链找到这个新生代对象，从GC Roots出发遍历对象时必须经过老年代对象。实际上以这种方式遍历时，是把所有对象都遍历了一遍。但是我们的其实只想回收新生代的对象，却把所有对象都遍历了一遍，这无疑很低效。&lt;/p&gt;
+&lt;p&gt;在YoungGC时，当RSet存在时，顺着引用链查找引用。如果引用链上出现了老年代对象，那么直接放弃查找这条引用链。当整个GC Root Tracing执行完毕后，就知道了除被跨代引用外还存活的新生代对象。紧接着再遍历新生代Region的RSet，如果RSet里存在key为老年代的Region，就将key对应的value代表的card的对象标记为存活，这样就标记到了被跨代引用的新生代对象。&lt;/p&gt;
+&lt;p&gt;当然这么做会存在一个问题，如果部分老年代对象是应该被回收的对象，但还是跨代引用了新生代，会导致原本应该被回收的新生代对象躲过本轮新生代回收。这部分对象就只能等到后续的老年代的垃圾回收mixed GC来回收掉。这也是为什么G1的回收精度比较低的原因之一。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E5%8D%A1%E8%A1%A8-4513353-1755072180997.png&#34;
+	width=&#34;1988&#34;
+	height=&#34;1771&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E5%8D%A1%E8%A1%A8-4513353-1755072180997_hu_e7911c7264f6eec1.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E5%8D%A1%E8%A1%A8-4513353-1755072180997_hu_c289fdeaa2be8268.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;卡表&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;112&#34;
+		data-flex-basis=&#34;269px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;以这幅图为例，region1和region2都引用了region3中的对象，那么region3的RSet中有两个key，分别是region1的起始地址和region2的起始地址。&lt;/p&gt;
+&lt;p&gt;在扫描region3的RSet时，发现key为0x6a的region是一个old区region。如果这时第3，5card对应的对象没有被标记为可达，那么这里就会根据RSet再次标记。&lt;/p&gt;
+&lt;p&gt;同样的，key为0x9b对应的region是一个young区域的region，那么0，2号card的对象则不会被标记。&lt;/p&gt;
+&lt;h3 id=&#34;young-gc流程&#34;&gt;Young GC流程
+&lt;/h3&gt;&lt;p&gt;在了解了region的内部结构之后，我们再来看一下G1的young gc的具体流程。&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;stop the world，整个young gc的流程都是在stw里进行的，这也是为什么young gc能回收全部eden区域的原因。控制young gc开销的办法只有减少young region的个数，也就是减少年轻代内存的大小，还有就是并发，多个线程同时进行gc，尽量减少stw时间。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;扫描GCRoots，注意这里扫描的GC Roots就是一般意义上的GC Roots，是扫描的直接指向young代的对象，那如果GC Root是直接指向老年代对象的，则会直接停止在这一步，也就是不往下扫描了。被老年代对象指向的young代对象会在接下来的利用Rset中key指向老年代的卡表识别出来，这样就避免了对老年代整个大的heap扫描，提高了效率。这也是为什么Rset能避免对老年代整体扫描的原因。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;排空dirty card quene，更新Rset。Rset中记录了哪些对象被老年代跨带引用，也就是当新生代对象被老年代对象引用时，应该更新这个记录到RSet中。但更新RSet记录的时机不是伴随着引用更改马上发生的。每当老年代引用新生代对象时，这个引用记录对应的card地址其实会被放入Dirty Card Queue（线程私有的，当线程私有的dirty card queue满了之后会被转移到全局的dirty card queue，这个全局是惟一的），原因是如果每次更新引用时直接更新Rset会导致多线程竞争，因为赋值操作很频繁，影响性能。所以更新Rset交由Refinement线程来进行。全局DirtyCardQueue的容量变化分为4个阶段&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/dirty-card-queue%E5%AE%B9%E9%87%8F%E5%8F%98%E5%8C%96-4521888-1755072180997.png&#34;
+	width=&#34;1214&#34;
+	height=&#34;176&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/dirty-card-queue%E5%AE%B9%E9%87%8F%E5%8F%98%E5%8C%96-4521888-1755072180997_hu_2a3d3df9c1c870fe.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/dirty-card-queue%E5%AE%B9%E9%87%8F%E5%8F%98%E5%8C%96-4521888-1755072180997_hu_945f1754809e35d1.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;dirty card queue容量变化&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;689&#34;
+		data-flex-basis=&#34;1655px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;白色：无事发生&lt;/p&gt;
+&lt;p&gt;绿色：Refinement线程被激活，-XX:G1ConcRefinementGreenZone=N指定的线程个数。从（全局和线程私有）队列中拿出dirty card。并更新到对应的Rset中&lt;/p&gt;
+&lt;p&gt;黄色：产生dirty card的速度过快，激活全部的Refinement线程，通过参数-XX:G1ConcRefinementYellowZone=N 指定&lt;/p&gt;
+&lt;p&gt;红色：产生dirty card的速度过快，将应用线程也加入到排空队列的工作中。目的是把应用线程拖慢，减慢dirty card产生。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;扫描Rset，扫描所有Rset中Old区到young区的引用。到这一步就确定出了young区域那些对象时存活的。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;拷贝对象到survivor区域或者晋升old区域。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;处理引用队列，软引用，弱引用，虚引用&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;以上就是young gc的全部流程。&lt;/p&gt;
+&lt;h3 id=&#34;三色标记算法&#34;&gt;三色标记算法
+&lt;/h3&gt;&lt;p&gt;知道了Young GC的流程后，接下俩我们将学习G1针对老年代的垃圾回收过程Mixed GC，但是在正式开始介绍之前我们先讲解一下可达性分析算法的具体实现，三色标记算法。以及三色标记算法的缺陷以及G1是如何解决这个缺陷的。&lt;/p&gt;
+&lt;p&gt;在可达性分析的思想指导下，我们需要标记对象是否可达，那么我们采用将对象标记为不同的颜色来区分对象是否可达。可以理解如果一个对象能从GC Roots出发并且遍历到，那么对象就是可达的，这个过程我们称为检查。&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;白色：对象还没被检查。&lt;/li&gt;
+&lt;li&gt;灰色：对象被检查了，但是对象的成员Field(对象中引用的其他对象)还没有被检查。这说明这个对象是可达的。&lt;/li&gt;
+&lt;li&gt;黑色：对象被检查了，对象的成员Fileld也被检查了。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;那么整个检测的过程，就是从GC Roots出发不断地遍历对象，并且将可达的对象标记成黑色的过程。当标记结束时，还是白色的对象就是没被遍历到的对象，即不可达的对象。&lt;/p&gt;
+&lt;p&gt;举个例子&lt;/p&gt;
+&lt;p&gt;第一轮检查，找到所有的GC Roots，GC Roots被标记为灰色，有的GC Roots因为没有成员Field则被标记为黑色。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%951-%281%29.png&#34;
+	width=&#34;2136&#34;
+	height=&#34;890&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%951-%281%29_hu_d5b16c539c6f1b9f.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%951-%281%29_hu_bdf63113233ba909.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;三色标记算法1 (E:/blog/my-blog/jvm/2023-12-30 jvm垃圾回收器理论/index.assets/三色标记算法1 (1).png)&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;240&#34;
+		data-flex-basis=&#34;576px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;第二轮检查，检查被GC Roots引用的对象，并标记为灰色&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%952-%281%29.png&#34;
+	width=&#34;2136&#34;
+	height=&#34;890&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%952-%281%29_hu_c905f18d6526dfe6.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%952-%281%29_hu_967ed7f95f4fe58a.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;三色标记算法2 (E:/blog/my-blog/jvm/2023-12-30 jvm垃圾回收器理论/index.assets/三色标记算法2 (1).png)&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;240&#34;
+		data-flex-basis=&#34;576px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;第三轮检查，循环之前的步骤，将被标记为灰色对象的子Field检查。因为这里就假设了3次循环检查的对象，所以是最后一次检查。这一路检查结束，还是白色的对象就是可以被回收的对象。即图例里的objectC&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%953-%281%29.png&#34;
+	width=&#34;2136&#34;
+	height=&#34;890&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%953-%281%29_hu_d6abdc7b431324e5.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%953-%281%29_hu_2b2ea097f1e3d3a9.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;三色标记算法3 (E:/blog/my-blog/jvm/2023-12-30 jvm垃圾回收器理论/index.assets/三色标记算法3 (1).png)&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;240&#34;
+		data-flex-basis=&#34;576px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;以上描述的是一轮三色标记算法的工作过程，但是这是一个理想情况，因为标记过程中，标记的线程是和用户线程交替运行的，所以可能出现标记过程中引用发生变化的情况。试想一下，在第二轮检查到第三轮检查之间，假设发生了引用的变化，objectD不再被objectB引用，而是被objectA引用，而且此时ObjectA的成员已经被检查完毕了，objectB的成员Field还没被检查。这时，objectD就永远不会再被检查到。这就导致了漏标。&lt;/p&gt;
+&lt;p&gt;还有一种漏标的情况，就是新产生一个对象，这个对象被已经被标记为黑色的对象持有。比如图例中的newObjectF。因为黑色对象已经被认为是检查完毕了，所以新产生的对象不会再被检查，这也会导致漏标。这两种漏标的解决方式我将仔细讲解一下。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%95%E6%BC%8F%E6%A0%87-1755075522465.png&#34;
+	width=&#34;2350&#34;
+	height=&#34;992&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%95%E6%BC%8F%E6%A0%87-1755075522465_hu_2884fc10f984742b.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/%E4%B8%89%E8%89%B2%E6%A0%87%E8%AE%B0%E7%AE%97%E6%B3%95%E6%BC%8F%E6%A0%87-1755075522465_hu_e50547798f55924e.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;三色标记算法漏标&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;236&#34;
+		data-flex-basis=&#34;568px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h4 id=&#34;&#34;&gt;
+&lt;/h4&gt;&lt;h4 id=&#34;已经存在的对象被漏标&#34;&gt;已经存在的对象被漏标
+&lt;/h4&gt;&lt;p&gt;即图例中被漏标的objectD，要向漏标objectD，必须同时满足：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;灰色对象不再指向白色对象，即objectB.d = null&lt;/li&gt;
+&lt;li&gt;黑色对象指向白色对象，即objectA.d = objectD&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;要解决漏标，只要打破这两个条件的任意一个即可。由此我们引出两个解决方案。原始快照和增量更新。&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;原始快照(Snapshot At The Beginning，简称SATB)
+当任意的灰色对象到白色对象的引用被删除时，记录下这个被删除的引用，默认这个被删除的引用对象是存活的。这也可以理解为整个检查过程中的引用关系以检查刚开始的那一刻为准。&lt;/li&gt;
+&lt;li&gt;增量更新(Incremental Update)
+当灰色对象被新增一个白色对象的引用的时候，记录下发生引用变更的黑色对象，并将它重新改变为灰色对象，重新标记。这是CMS采用的解决办法（没错，CMS也是三色标记算法实现的）。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;在上面的两种解决方案里，我们发现，无论如何，都要记录下发生更改的引用。所以我们需要一种记录引用发生更改的手段，写屏障(write barrier)。写屏障是一种记录下引用发生变更的手段，效果类似AOP，但是其实现远比我们使用的AOP更加底层，大家可以认为是在JVM代码层面的一段代码。每当任意的引用变更时，就会触发这段代码，并记录下发生变更的引用。&lt;/p&gt;
+&lt;h4 id=&#34;新产生的对象被漏标&#34;&gt;新产生的对象被漏标
+&lt;/h4&gt;&lt;p&gt;新产生的对象被漏标的解决方式则简单一些，在增量更新模式下，这个问题天生就被解决了。在SATB模式下，我们其实是在检查一开始就确定了一个检查范围，所以我们可以将新产生的对象放在检查范围之外，默认新产生的对象时存活的。当然这个过程得实际结合卡表来讲解才会更加具体形象。接下来在Mixed GC的过程里再细说。&lt;/p&gt;
+&lt;h4 id=&#34;satb&#34;&gt;SATB
+&lt;/h4&gt;&lt;p&gt;Snapshot At The Beginning，G1在分配对象时，会在region中有2个top-at-mark-start（TAMS）指针，分别表示prevTAMS和nextTAMS。对应着卡表上即指向表示卡表范围的的两个编号，GC时分配在nextTAMS位置以上的对象都视为活着的，这是一种隐式的标记（这涉及到G1 MixedGC垃圾回收阶段的细节，很复杂，接下来会详细讨论）。这种解决漏标的方式是有缺陷的，它会造成真正应该被回收的白对象躲过这次GC生存到下一次GC，这就是float garbage(浮动垃圾)。因为SATB的做法精度比较低，所以造成float garbage的情况也会比较多。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/SATB%E7%AE%80%E4%BB%8B-1755072180997.png&#34;
+	width=&#34;770&#34;
+	height=&#34;745&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/SATB%E7%AE%80%E4%BB%8B-1755072180997_hu_a2f797b0c2359c2e.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/SATB%E7%AE%80%E4%BB%8B-1755072180997_hu_148e9d194c7a2b17.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;SATB简介&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;103&#34;
+		data-flex-basis=&#34;248px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h3 id=&#34;mixed-gc&#34;&gt;Mixed GC
+&lt;/h3&gt;&lt;p&gt;通过前面的学习，我们已经认识到了G1采用的标记算法-三色标记算法以及解决里面问题的解决思想，接下来我们将讲解Mixed GC的详细过程，以及怎样利用G1的卡表来解决里面的问题。&lt;/p&gt;
+&lt;p&gt;Mixed GC从步骤上可以分为两个大步骤，全局并发标记（global concurrent marking），拷贝存活对象（evacuation）。全局并发表及的过程涉及到SATB的标记过程，我们将详细讲解。&lt;/p&gt;
+&lt;p&gt;全局&lt;/p&gt;
+&lt;p&gt;G1收集器垃圾收集器的全局并发标记（global concurrent marking）分为多个阶段&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;初始标记（initial  marking）
+这个阶段会STW，标记从GC Root开始直接可达的对象，这一步伴随着young gc。之所以要young gc是为了处理跨代引用，老年代独享也可能被年轻代跨代引用，但是老年代不能使用RSet来解决跨代饮用。还有就是young gc也会stw，在第一步young gc可以公用stw的时间，尽量减少stw时间。
+这一步还初始化了一些参数，将bottom指针赋值给prevTAMS指针，top指针赋值给nextTAMS指针，同时清空nextBitMap指针。因为之后的并发标记需要使用到这三个变量。
+这里大家可能被这些变量搞晕了，我解释一下，top，prevTAMS，nextTAMS，top都是指向卡表的指针，他们的存在是为了标识哪些对象是可以被回收的，哪些是存活的，这就是SATB机制。而nextBitMap则是记录下卡表中哪些对象是存活的一个数组，当然现在还没开始检查，nextBitMap里的记录都是空。
+&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/init-marking-%281%29.png&#34;
+	width=&#34;2436&#34;
+	height=&#34;1086&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/init-marking-%281%29_hu_5eb2050dbd87f9bf.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/init-marking-%281%29_hu_7dd1aff28f93d1b2.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;init marking (E:/blog/my-blog/jvm/2023-12-30 jvm垃圾回收器理论/index.assets/init marking (1).png)&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;224&#34;
+		data-flex-basis=&#34;538px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;根分区扫描（root region scan）
+这个阶段在stw之后，会扫描survivor区域（survivor分区就是根分区），将所有被survivor区域对象引用的老年代对象标记。这也是上一步需要young gc的原因，处理跨代引用时需要知道哪些old区对象被S区对象引用。这个过程因为需要扫描survivor分区，所以不能发生young gc，如果扫描过程中新生代被耗尽，那么必须等待扫描结束才可以开始young gc。这一步耗时很短。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;并发标记（Concurrent Marking）
+从GC Roots开始对堆中对象进行可达性分析，找出各个region的存活对象信息，耗时较长。粗略过程是这样的，但实际这一步的过程很复杂。因为要考虑在SATB机制之下，各个指针的变化。
+假设在根分区扫描后没有引用的改变，那么一个region的分区状态和第一步init marking初始化完一致。此时如果再继续分配对象，那么对象会分配在nextTAMS之后，随着对象的分配，TOP指针会向后移动。&lt;/p&gt;
+&lt;p&gt;![concurrent marking](index.assets/concurrent marking-1755072180997.png)
+因为这一步是和mutator(用户线程)并发运行的，所以从根节点扫描的时候其实是扫描的一个快照snapshot，快照位置就是prevTAMS到nextTAMS（注意快照位置是不变的，但是prevTAMS到nextTAMS之间的对象在扫描过程中会改变）。
+当region中分配新对象时，新对象都会分配在nextTAMS之后，这导致top指向的位置也往后移动，nextTAMS和top之间的对选哪个都是被认为隐式存活。
+还有这期间也有可能应该被扫描的位置prevTAMS和nextTAMS之间的位置引用发生了变化，比如白色对象被黑色对象持有了，这就是三色标记算法的缺陷，需要更改白色对象的状态。这里会将引用被更改的对象放入satb_mark_queue。satb_mark_queue是一个队列，里面记录所有被改变引用关系的白色对象。这里指的satb_mark_queue指的全局的queue。除了全局的queue，每个线程也有自己的satb mark queue，全局的queue的引用是由所有其他线程的satb mark queue合并得来的，线程的satb mark queu满了会被转移到全局satb mark queue。且并发标记阶段会定期检查全局satb mark queue的容量，超过某个容量就concurrent marker线程就会将全局satb mark que和线程satb mark que的对象都取出来全部标记上，当然也会将这些对象的子field全部压栈（marking stack）等待接下来被标记到，这个处理类似于全局dirty card quene。这里注意。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/satb-mark-queue-1755072180997.png&#34;
+	width=&#34;1554&#34;
+	height=&#34;1753&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/satb-mark-queue-1755072180997_hu_655ae2bd67bc70e9.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/satb-mark-queue-1755072180997_hu_4938b1607a803e93.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;satb mark queue&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;88&#34;
+		data-flex-basis=&#34;212px&#34;
+	
+&gt;
+随着并发标记结束nextBitMap里也标记了那些对象是可以回收的，但注意，不一定每个线程里satb mark queue都被转移到了全局的satb mark queue，因为合并这个过程也是并发的。所以需要下一步&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;最终标记（remark）
+标记那些并发标记阶段发生变化的对象，就是将线程satb mark queue中引用发生更改的对象找出来，放入satb mark queue。这个阶段为了保证标记正确必须STW。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;清点垃圾（cleanup）
+对各个region的回收价值和成本进行排序，根据用户期待的GC停顿时间指定回收计划，选中部分old region,和全部的young region，这些被选中的分区称为Collection Set（Cset），还会把没有任何对象的region加入到可用来分配对象的region集合中。注意这一步不是清除，是清点出哪些region值得回首，不会复制任何对象。清点执行完，一个全局并发标记周期基本就执行完了。这时还会将nextTAMS指针赋值给prevTAMS，且nextBitMap赋值给prevBitMap。这里是不是很奇怪为什么要记录本轮标记的结果到prevBitMap，难道下次再来检查本region时还可以在复用这个标记结果吗。
+我们知道G1是可以根据内存的变化自己调整内存中E区，O区的容量的，如果其中某些分区容量增长比较快，说明这个分区的内存访问更频繁，在未来也可能更快地达到region的容量限制，那么下次复制转移时就会优先将这块region中的对象转移到更大的region中去。&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;标记结束剩下的就是转移evacuation，拷贝存活对象。就是将活着的对象拷贝到空的region,在回收掉部分region。这一步是采用多线程复制清除，整个过程会STW。这也是G1的优势之一，只要还有一块空闲的region，就可以完成垃圾回收。而不用像CMS那样必须预留太多的内存。&lt;/p&gt;
+&lt;h3 id=&#34;g1点评&#34;&gt;G1点评
+&lt;/h3&gt;&lt;p&gt;从G1的设计上来看，它使用了大量的额外结构来存储引用关系，并以此来减少垃圾回收中标记的耗时。但是这种额外的结构带来的内存浪费也是存在的，极端情况甚至可以额外占用20%的内存。而基于region的内存划分规则则让内存分配更加复杂，但是这也有好处。就是内存的回收后产生的碎片更少，也就更少触发full gc。&lt;/p&gt;
+&lt;p&gt;根据经验，在大部分的大型内存(6G以上)服务器上，无论是吞吐量还是STW时间，G1的性能都是要优于CMS。&lt;/p&gt;
+&lt;h2 id=&#34;zgc&#34;&gt;ZGC
+&lt;/h2&gt;&lt;p&gt;了解完G1之后，让我们再来看看大名鼎鼎的ZGC，也是目前号称&amp;quot;全程并发，能将停顿时间控制在10ms&amp;quot;内的低延迟垃圾回收器。ZGC全程Z Garbage Collector，这里面的Z不是什么缩写。ZGC在JDK11开始实验性的开放功能，在JDK17开始实装。在讲解ZGC的垃圾回收流程以前，让我们先介绍一下ZGC里面的技术设计，这有助于我们理解ZGC的工作过程。&lt;/p&gt;
+&lt;h3 id=&#34;page内存布局&#34;&gt;Page内存布局
+&lt;/h3&gt;&lt;p&gt;zgc也是将堆内存划分为一系列的内存分区，称为page(深入理解JVM原书上管这种分区叫做region，但是官方文档还是叫做的page，我们这里引用官方文档的称呼以免和G1搞混)，这种管理方式和G1 GC很相似，但是ZGC的page不具备分代，准确的说应该是ZGC目前不具备分代的特点（目前JDK17版本下的ZGC还是没有分代的）。原因是如果将ZGC设计为支持分代的垃圾回收，设计太复杂，所以先将ZGC设计为无分代的GC模式，后续再迭代。ZGC的page有3种类型。&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;小型page(small page)
+容量2M，存放小于256k的对象&lt;/li&gt;
+&lt;li&gt;中型page(medium page)
+容量32M，存放大于等于256k，但是小于4M的page&lt;/li&gt;
+&lt;li&gt;大型page(large page)
+容量不固定，但是必须是2M的整数倍。存放4M以上的对象，且只能存放一个对象。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-page-1755072180997.png&#34;
+	width=&#34;955&#34;
+	height=&#34;500&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-page-1755072180997_hu_46256fbaa5618217.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-page-1755072180997_hu_60efe72bacb11fc4.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;ZGC page&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;191&#34;
+		data-flex-basis=&#34;458px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h3 id=&#34;内存回收算法&#34;&gt;内存回收算法
+&lt;/h3&gt;&lt;p&gt;ZGC的回收算法也遵循先找到垃圾，然后回收掉垃圾的步骤，其中最复杂的过程也是找到垃圾这个过程。要理解ZGC的并发回收过程先了解3个概念。&lt;/p&gt;
+&lt;h4 id=&#34;染色指针&#34;&gt;染色指针
+&lt;/h4&gt;&lt;p&gt;Colored Pointer，染色指针是一种让指针存储额外信息的技术。我们知道在64位操作系统里，一个内存的地址总共64位，但是受限于实际物理内存的大小，我们其实并不是真正的使用所有64位。这里如果小伙伴了解linux的虚拟内存管理会很好理解，我这里大概解释一下。我们平时所说操作系统的&amp;quot;物理内存地址&amp;quot;并不是真正的&amp;quot;物理内存地址&amp;quot;，也就是说，并不是物理上，内存颗粒对应的地址。而是操作系统为我们虚拟的一个&amp;quot;虚拟地址&amp;quot;，这个技术被称为虚拟内存管理。虚拟内存基本在所有的linux服务器上都有使用，除了少部分嵌入式设备，因为内存太小不需要使用这种技术。在虚拟内存的帮助下，我们可以做到两个虚拟内存地址对应一个真实的物理地址。虚拟内存的知识不是我们的重点，大家有个映象即可。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-%E6%9F%93%E8%89%B2%E6%8C%87%E9%92%88-1704724177075-1755072180997.png&#34;
+	width=&#34;1306&#34;
+	height=&#34;905&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-%E6%9F%93%E8%89%B2%E6%8C%87%E9%92%88-1704724177075-1755072180997_hu_b1d60ac78596e0e2.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-%E6%9F%93%E8%89%B2%E6%8C%87%E9%92%88-1704724177075-1755072180997_hu_8b64b6b532e7a74d.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;ZGC 染色指针&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;144&#34;
+		data-flex-basis=&#34;346px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;p&gt;对于JVM来说，一个对象的地址只使用前42位，而第43-46位用来存储额外的信息，即GC对象处于ZGC那个阶段。只使用46位的客观原因是linux系统只支持46位的物理地址空间，即64T的内存，如果一定想要使用更大的内存，需要linux额外的设置。但是这个内存设置在主流的服务器上都够用了。&lt;/p&gt;
+&lt;p&gt;在引用地址的划分上，对象引用第43位表示marked0标记，44位marked1标记，45位remapped标记，46位finalizable标记。指针染色就是给对应的位置为1,当然这三个位同一个时间只能有一个位生效。这些标记分别表示对象处于GC的那个阶段里。在下面ZGC的详细过程里我们会介绍染色指针怎么帮助GC的。指针的引用地址在各个标记之间切换也被称为指针的自愈。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-%E6%9F%93%E8%89%B2%E6%8C%87%E9%92%882-1755072180997.png&#34;
+	width=&#34;2832&#34;
+	height=&#34;1564&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-%E6%9F%93%E8%89%B2%E6%8C%87%E9%92%882-1755072180997_hu_c69dbb778ec5947a.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-%E6%9F%93%E8%89%B2%E6%8C%87%E9%92%882-1755072180997_hu_eb152974ec9276c7.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;ZGC 染色指针2&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;181&#34;
+		data-flex-basis=&#34;434px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h4 id=&#34;读屏障&#34;&gt;读屏障
+&lt;/h4&gt;&lt;p&gt;read barrier，就是JVM向应用代码插入一小段代码的技术，仅当线程从堆中读取对象引用时触发。效果上类似于写屏障，不过是在对象被读取时触发。&lt;/p&gt;
+&lt;p&gt;读屏障主要是用来改写每个地址的命名空间。这里还涉及到指针的自愈self healing。指针的自愈是指的当访问一个正处于重分配集中的对象时会被读屏障拦截，然后通过转发记录表forwarding table将访问转发到新复制的对象上，并且修正并更新该引用的值，使其直接指向新对象。也是因为这个能力，ZGC的STW时间大大缩短，其他的GC则需要修复所有指向本对象的指针后才能访问。这里的内容可能看不明白，没关系先放在这里后续看完ZGC的详细流程就会明白。&lt;/p&gt;
+&lt;h4 id=&#34;numa&#34;&gt;NUMA
+&lt;/h4&gt;&lt;p&gt;numa不是ZGC在垃圾回收器上的创新，但是是ZGC的一大特点。大家了解就可以了。了解NUMA先了解UMA。&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;uma(Uniform Memory Access Architeture)
+统一内存访问，也是一般电脑的正常架构，即一块内存多个CPU访问，所以在多核CPU在访问一块内存时会出现竞争。操作系统为了为了锁住某一块内存会限制总线上对某个内存的访问，当CPU变多时总线就会变成瓶颈。&lt;/li&gt;
+&lt;li&gt;numa(non Uniform Memory Access Architeture)
+非统一内存访问，每块CPU都有自己的一块对应内存，一般是距离CPU比较近的，CPU会优先访问这块内存。因为CPU之间访问各自的内存这样就减少了竞争，效率更高。numa技术允许将多台机器组成一个服务供外部使用，这种技术在大型系统上比较流行，也是一种高性能解决方案，而且堆空间也可以由多台机器组成。ZGC对numa的适配就是ZGC能够自己感知numa架构。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h3 id=&#34;zgc流程&#34;&gt;ZGC流程
+&lt;/h3&gt;&lt;p&gt;接下来我们详细学习ZGC的流程，这里引入一个概念，good_mask。good_mask是记录JVM垃圾回收阶段的标志，随着GC进行不断切换，并且让JVM根据good_mask和对象的标记位的关系识别对象是不是本轮GC里产生的，good_mask可以说是记录当前JVM视图空间的变量。ZGC流程如下。&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;初始标记(Init Mark)
+初始标记，这一步和G1类似，也是记录下所有从GC Roots可达的对象。除此之外，还切换了good_mask的值，good_mask初始化出来是remapped，经过这次切换，就变为了marked1(这里很多人认为第一次是切换到0，其实不是的)。需要注意的是，对象的指针，因为还没有参加过GC，所以对象的标志位是出于Remapped。经过这一步，所有GC Roots可达的对象就被标记为了marked1。
+&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-init-mark-1755072180997.png&#34;
+	width=&#34;3857&#34;
+	height=&#34;1760&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-init-mark-1755072180997_hu_6dccacb9ce6186a6.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-init-mark-1755072180997_hu_c6bc0ae3799a5418.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;ZGC init mark&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;219&#34;
+		data-flex-basis=&#34;525px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;并发标记(Concurrent Mark)
+第一执行标记时，视图为marked1，GC线程从GCRoots出发，如果对象被GC线程访问，那么对象的地址视图会被Remapped切换到marked1，在标记结束时，如果对象的地址空间是marked1，那么说明对象是活跃的，如果是Remapped，那么说明对象是不活跃的。同时还会记录下每个内页中存活的对象的字节数大小，以便后续做页面迁移。这个阶段新分配的对象的染色指针会被置为marked1。
+这个阶段还有一件事，就是修复上一次GC时被标记的指针，这也是为什么染色指针需要两个命名空间的原因。如果命名空间只有一个，那么本次标记时就区分不出来一个已经被标记过的指针是本次标记还是上次标记的。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;重新标记(Remark)
+这个阶段是处理一些并发标记阶段未处理完的任务(少量STW，控制在1ms内)如果没处理完还会再次并发标记，这里其实主要是解决三色标计算法中的漏标的问题,即白色对象被黑色对象持有的问题。并发标记阶段发生引用更改的对象会被记录下来(触发读屏障就会记录)，在这个阶段标记引用被更改的对象。这里我就不画图了，大家理解意思就行。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;并发预备重分配(Concurrent Prepare for Relocate)
+这一步主要是为了之后的迁移做准备，这一步主要是处理软引用，弱引用，虚引用对象，以及重置page的Forwarding table，收集待回收的page信息到Relocation Set
+Forwarding table是记录对象被迁移后的新旧引用的映射表。Relocation Set是存放记录需要回收的存活页集合。这个阶段ZGC会扫描所有的page，将需要迁移的page信息存储到Relocation Set，这一点和G1很不一样，G1是只选择部分需要回收的Region。在记录page信息的同时还会初始化page的Forwarding table，记录下每个page里有哪些需要迁移的对象。这一步耗时很长，因为是全量扫描所有的page，但是因为是和用户线程并发运行的，所以并不会STW，而且对比G1，还省去了维护RSet和SATB的成本。
+&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-concurrent-prepare-for-relocate-%281%29.png&#34;
+	width=&#34;3051&#34;
+	height=&#34;1538&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-concurrent-prepare-for-relocate-%281%29_hu_398f04baf583b4c4.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-concurrent-prepare-for-relocate-%281%29_hu_4269fcdcacd3db8b.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;ZGC concurrent prepare for relocate (E:/blog/my-blog/jvm/2023-12-30 jvm垃圾回收器理论/index.assets/ZGC concurrent prepare for relocate (1).png)&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;198&#34;
+		data-flex-basis=&#34;476px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;初始迁移(Relocate Start)
+这个阶段是为了找出所有GC Roots直接可达的对象，并且切换good_mask到remapped，这一步是STW的。这里注意一个问题，被GC Roots直接引用的对象可能需要迁移。如果需要，则会将该对象复制到新的page里，并且修正GC Roots指向本对象的指针，这个过程就是&amp;quot;指针的自愈&amp;quot;。当然这不是重点重点是切换good_mask。
+&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-relocate-start-1755072180997.png&#34;
+	width=&#34;3793&#34;
+	height=&#34;1714&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-relocate-start-1755072180997_hu_6daa9b0729bd4e84.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-relocate-start-1755072180997_hu_afeade0108125337.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;ZGC relocate start&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;221&#34;
+		data-flex-basis=&#34;531px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;并发迁移(Concurrent Relocate)&lt;/p&gt;
+&lt;p&gt;这个阶段需要遍历所有的page，并且根据page的forward table将存活的对象复制到其他page，然后再forward table里记录对象的新老引用地址的对应关系。page中的对象被迁移完毕后，page就会被回收，注意这里并不会回收掉forward table，否则新老对象的映射关系就丢失了。
+这个阶段如果正好用户线程访问了被迁移后的对象，那么也会根据forward table修正这个对象被持有的引用，这也是&amp;quot;指针的自愈&amp;quot;。
+&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-concurrent-relocate-1755072180997.png&#34;
+	width=&#34;3758&#34;
+	height=&#34;1981&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-concurrent-relocate-1755072180997_hu_4fad1c30979b9f1d.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC-concurrent-relocate-1755072180997_hu_9186833217e0bf48.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;ZGC concurrent relocate&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;189&#34;
+		data-flex-basis=&#34;455px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;并发重映射(Concurrent Remap)
+这个阶段是为了修正所有的被迁移后的对象的引用。严格来说并发重映射并不属于本轮GC阶段要采取的操作。因为在第6步执行后，我们就得到了所有的需要重新映射的对象被迁移前后地址映射关系，有了这个关系，在以后的访问时刻，都可以根据这个映射关系重新修正对象的引用，即&amp;quot;指针自愈&amp;quot;。如果这里直接了当的再重新根据GC Roots遍历所有对象，当然可以完成所有对象的&amp;quot;指针自愈&amp;quot;，但是实际是额外的产生了一次遍历所有对象的操作。所以ZGC采取的办法是将这个阶段推迟到下轮ZGC的并发标记去完成，这样就公用了遍历所有对象的过程。而在下次ZGC开始之前，任何的线程访问被迁移后的对象的引用，则可以触发读屏障，并根据forward table自己识别出对象被迁移后的地址，自行完成&amp;quot;指针自愈&amp;quot;。&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC%20concurrent%20remap.png&#34;
+	width=&#34;3604&#34;
+	height=&#34;1981&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC%20concurrent%20remap_hu_33921297c5486599.png 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/ZGC%20concurrent%20remap_hu_aeef355003388ecd.png 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;ZGC concurrent remap&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;181&#34;
+		data-flex-basis=&#34;436px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h3 id=&#34;zgc点评&#34;&gt;ZGC点评
+&lt;/h3&gt;&lt;p&gt;以我的能力来点评ZGC的设计似乎有点不妥，但是我还是想结合自己的理解，评价一下ZGC的的优缺点。ZGC的优势很明显，几乎全程并发的回收过程带来了无与伦比的低暂停时间，这也是ZGC的设计思路。低暂停时间加上JAVA本身的支持高并发的特点，假以时日ZGC将来一定是能在服务器领域的展现它大杀器级别的威力。但是为了达到这个设计目标，ZGC其实也牺牲了一些东西，比如吞吐量。我知道在很多地方，比如《深入理解JVM》这本书上，都把ZGC描述成全方位碾压G1的姿态。但是并不是的，至少在JDK21之前的不分代的ZGC不是的，具体的测试，大家可以看一下一篇Oracle的文章。链接我贴在下面。&lt;/p&gt;
+&lt;p&gt;&lt;a class=&#34;link&#34; href=&#34;https://cr.openjdk.org/~pliden/slides/ZGC-OracleDevLive-2020.pdf&#34;  target=&#34;_blank&#34; rel=&#34;noopener&#34;
+    &gt;https://cr.openjdk.org/~pliden/slides/ZGC-OracleDevLive-2020.pdf&lt;/a&gt;&lt;/p&gt;
+&lt;p&gt;当然这些缺点随着ZGC的成熟，以及JDK21在ZGC里加入分代的特性，都会一点点的好转。总而言之ZGC还是设计非常优秀的一款垃圾回收器。大家要好好学，尤其是现在ZGC还不是特别流行时，面试时多吹一吹，立马就能唬住一般的面试官。&lt;/p&gt;
+&lt;hr&gt;
+&lt;h1 id=&#34;end&#34;&gt;END
+&lt;/h1&gt;&lt;p&gt;JVM垃圾回收器的知识实在太多了，写起来非常费劲，关于GC日志相关的知识我就放到下一章节再讲了，下一章应该还有一点点JVM垃圾回收器的收尾知识。&lt;/p&gt;
+&lt;p&gt;大家多点赞啊。&lt;/p&gt;
+</description>
+        </item>
+        <item>
+        <title>jvm垃圾回收器前篇</title>
+        <link>http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/</link>
+        <pubDate>Sat, 30 Dec 2023 00:00:00 +0000</pubDate>
+        
+        <guid>http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/</guid>
+        <description>&lt;img src="http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/cover.jpg" alt="Featured image of post jvm垃圾回收器前篇" /&gt;&lt;h1 id=&#34;学习背景&#34;&gt;学习背景
+&lt;/h1&gt;&lt;p&gt;在正式开始垃圾回收器的知识学习之前，我们要先介绍一下本次学习的主要目标。&lt;/p&gt;
+&lt;p&gt;大部分人，包括我自己学习垃圾回收器的主要目标就是因为这个知识点实在是太重要了，而且很少有系统并且全面的介绍，系统并且全面的程度至少要足够应付面试。哈哈，面向面试学习。&lt;/p&gt;
+&lt;p&gt;本章节的学习目标主要是介绍各个垃圾回收器的实现思想，以及部分垃圾回收器的实现原理。为了方便各位阅读，这里再介绍一下一些术语&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;JVM
+java virtual machine， java虚拟机的缩写&lt;/li&gt;
+&lt;li&gt;STW
+Stop the world，指垃圾回收器回收垃圾过程中，暂停整个JVM中用户程序的过程&lt;/li&gt;
+&lt;/ul&gt;
+&lt;h1 id=&#34;垃圾回收器是什么&#34;&gt;垃圾回收器是什么
+&lt;/h1&gt;&lt;p&gt;在回答这个问题之前，我们先回顾一下java语言的特性-内存安全。程序员不需要手动释放内存，内存分配以及回收全部交给垃圾回收器完成。这句话概括了垃圾回收器的职责，但是不够具体。垃圾回收器作为JVM的一个模块，应该是更加具体，有实际的物理指代的实体。当然，从JVM的发展史，以及生态来说，不同的JVM实现有不同的垃圾回收器，甚至在一个JVM实现里有多个垃圾回收器(这种做法也是比较主流的JVM的垃圾回收器实现做法)。不同的垃圾回收器针对被回收对象的特点选择合适的算法，以及内存分配方式管理内存，帮助我们高效的使用JVM。在正式开始垃圾回收器的介绍之前，我先介绍一下比较重要的几个JVM实现，以及历史上的JVM实现，因为我们要学习的垃圾回收器，其理论实现也是由这些JVM完成的。&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;Sun Classic
+伴随着JDK1.0发布的第一款商用虚拟机，目前已经退出舞台。&lt;/li&gt;
+&lt;li&gt;HotSpot VM
+虚拟机领域的王者，可以说是目前使用最广泛的jvm。虽然这款JVM是目前JAVA服务器领域使用最广泛的实现，但是它一开始并不是为java语言设计的，甚至不是SUN公司设计的。HotSpot一开始由一家小公司&amp;quot;Longview Technologies&amp;quot;设计，Sun公司注意到这款JVM的很多设计非常可圈可点，于是收购了这家公司。当然后来SUN又被Oracle收购了，现在HotSpot的实现由Oracel负责。&lt;/li&gt;
+&lt;li&gt;JRockit
+由BEA System实现，在JVM内部大量使用即时编译技术，曾经号称&amp;quot;世界上运行最快的JVM&amp;quot;。后来也被Oracle收购了(怎么哪里都有你，oracle!)，现在已经不再发展。&lt;/li&gt;
+&lt;li&gt;IBM J9
+IBM主力发展的JVM，曾经和HotSpot，JRockit并称JVM三雄。后来被IBM捐给Eclipse基金会，实际上Eclipse也是IBM成立的，不过是单独运作。&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;在后面的垃圾回收器的理论学习里，我们将主要选择HotSpot的实现来讨论。&lt;/p&gt;
+&lt;h1 id=&#34;jvm内存区域&#34;&gt;JVM内存区域
+&lt;/h1&gt;&lt;p&gt;在讨论垃圾回收器之前，还需要了解JVM的内存布局，了解内存布局能帮助我们更好的理解垃圾回收器的工作机制，不仅仅是垃圾回收器的工作机制，后续的编译器的知识也需要提前了解jvm内存布局。根据《java虚拟机规范》jvm的内存布局分为下面几个部分。&lt;/p&gt;
+&lt;p&gt;![jvm内存布局](E:\blog\my-blog\2023-12-30 jvm垃圾回收器理论/jvm垃圾回收器上篇.assets/jvm内存布局.jpg)&lt;/p&gt;
+&lt;p&gt;看到这一坨不知道是做什么的区域划分是不是一脸懵逼，不要急，等我慢慢解释。&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;程序计数器
+在jvm运行过程中，往往需要从一个线程切换到另外一个线程。但是实际上，物理意义上一个cpu核心一个时刻只能有一个线程在运行。那么jvm为了实现看起来在&amp;quot;一个时刻&amp;quot;，比如说&amp;quot;1秒钟&amp;quot;内运行多个线程这种效果。本质就是通过在多个线程之间切换跳转完成的。程序计数器是一块线程私有的区域，他的作用就是用来记录当前线程执行的指令位置。(这里的知识如果了解操作系统关于CPU调度时间片的理论的话，理解起来会更加形象)&lt;/li&gt;
+&lt;li&gt;虚拟机栈
+jvm的运行是基于字节码指令来完成的，关于字节码指令运行的细节以及指令之间切换的过程很复杂，在后续关于编译器的内容里我们再细说。这里大家有个大概的概念即可，所有指令按照后进先出的方式排队(也被称为压栈)，虚拟机栈就是来记录每条指令的，每当一条指令被执行完毕，这条指令就从栈中移除，被称为弹栈。这里只是一个大概的描述，实际上虚拟机栈里除了存储指令还存储了指令需要使用的变量(局部变量表)，方法的返回地址，方法出口等信息。简单的理解就是为了执行这条指令所必须得参数以及返回值地址等信息。&lt;/li&gt;
+&lt;li&gt;native栈
+也被称为本地方法栈，结构和虚拟机栈类似。区别是虚拟机栈是为了执行java方法的，但是本地方法栈则是为了执行非java方法的。比如USafe工具，里面的方法大部分都是native的，用native标记。
+&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/image-20240102180943864.jpg&#34;
+	width=&#34;1536&#34;
+	height=&#34;566&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/image-20240102180943864_hu_d706cb4e9ed0eff2.jpg 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/image-20240102180943864_hu_158d94e6d1b3be35.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;image-20240102180943864&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;271&#34;
+		data-flex-basis=&#34;651px&#34;
+	
+&gt;&lt;/li&gt;
+&lt;li&gt;堆
+jvm中内存最大的区域，也是存放数组和对象的位置。也是我们今天要讲的垃圾回收器的主要工作区域。在很多描述垃圾回收的理论里常出现&amp;quot;新生代&amp;quot;，&amp;ldquo;老年代&amp;quot;的概念。其实所谓新生代，老年代都是指的堆中的内存，只不过按照不同的划分方式划分。堆中的内存可以认为几乎是所有线程共享的，但不是全部。因为在实际的内存分配时，为了加速线程访问速度，每个线程在堆上还有一小块私有区域，叫做TLAB(Thread Local Allocation Buffer)。试想一下，假设没有这个TLAB区域，每个线程随机访问内存，那么很容易就产生线程竞争，拖慢线程访问速度。&lt;/li&gt;
+&lt;li&gt;方法区
+方法区是存放被编译后的类信息，常量，静态变量等信息。方法区本质也是堆的一部分，但是因为它的重要性还是把它与堆区分开来。说到方法区，还要提到一个概念&amp;quot;永久代&amp;rdquo;。以HotSpot为例，在JDK7之前，HotSpot是使用永久代来实现方法区。具体做法是让垃圾回收器管理像管理堆一样管理这部分内存，这样就省去了专门为方法区编写内存管理代码的工作。但是同时期的一些JVM，比如J9，JRocikt是不存在永久代的概念的。这里就能看出来《java虚拟机规范》只是一个规范，具体的实现则掌握在开发团队手里。长久来看这种做法并不是一个好主意，因为这会导致内存溢出的风险，所以HotSpot团队在JDK7版本彻底放弃了永久代的概念，将原本永久代拆分成方法区和常量池。&lt;/li&gt;
+&lt;li&gt;运行时常量池
+运行时常量池是方法区的一部分，用来存放类被编译后的常量，但是这个常量池也可以在运行时动态增加，比如String的intern方法就可以添加新的常量&lt;/li&gt;
+&lt;li&gt;直接内存
+这一块内存不属于JVM运行时内存的部分，但是也可能被经常使用，比如NIO库中的DirectByteBuffer就是操作的直接内存，大名鼎鼎的Netty的ByteBuf也是使用的直接内存。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;好吧前面我们叨逼叨了这么久，总算是快进入到正题了，但最后容许我再叨逼叨一点。实际上最好再讲讲对象创建以及对象内存布局的内容，但是如果继续铺垫，就显得&amp;quot;前奏&amp;quot;太冗长，所以这部分内容等后面讲编译器相关内容的时候我再拿出来详细介绍。&lt;/p&gt;
+&lt;h1 id=&#34;垃圾回收理论&#34;&gt;垃圾回收理论
+&lt;/h1&gt;&lt;h2 id=&#34;指导思想&#34;&gt;指导思想
+&lt;/h2&gt;&lt;p&gt;设想一下，要回收一个对象，要怎么回收。大致上我们可以分为两步。&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;确定那些对象需要回收-识别垃圾&lt;/li&gt;
+&lt;li&gt;将需要回收的对象所在的内存置空-回收垃圾
+我们分别以这两个步骤来介绍垃圾回收器的设计思想。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h3 id=&#34;识别垃圾&#34;&gt;识别垃圾
+&lt;/h3&gt;&lt;h4 id=&#34;引用计数算法&#34;&gt;引用计数算法
+&lt;/h4&gt;&lt;p&gt;假如我有一个额外的区域，里面记录了每个对象被引用的次数。比如objectA = 2;表示有两个对象引用了objectA对象。
+每当有其他对象引用obecjtA，比如objectB.a = objectA时就将引用次数+1，当引用失效时引用-1(包括释放引用objectB.a=null以及持有引用的objectB被销毁)。当objectA的被引用次数归零时，说明没有其他对象再objectA，这时就可以销毁objectA。
+这时一种很朴素的思路，也是很多软件采取的垃圾回收方式，比如FlashPlayer，Python，Redis里都有使用这个算法。但是java里主流的JVM都没有采用这种算法，因为它很难处理循环引用的情况，需要编写额外的代码。
+一个简单的循环引用的例子&lt;/p&gt;
+&lt;h4 id=&#34;可达性分析算法&#34;&gt;可达性分析算法
+&lt;/h4&gt;&lt;p&gt;主流的现代jvm都采用的可达性分析算法来判断一个对象是否可以被回收。可达性分析算法要求从一些列被称为&amp;quot;GC root&amp;quot;的对象出发，遍历这些对象引用的对象，我们称为子Field。并不断地再找到子Field引用的对象。通过这种不断向更深处找到被引用对象的方式，我们可以得到一条&amp;quot;引用链&amp;quot;(reference chain)，处于引用链上的对象就是存活的。处于引用链之外的对象就是可以被回收的。
+![GC ROOT](index.assets/GC ROOT.jpg)
+在实际的算法实现中，被用作GC ROOT的对象一般是以下几种&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;虚拟机栈中的对象，比如局部变量，临时变量&lt;/li&gt;
+&lt;li&gt;方法区静态属性引用的对象&lt;/li&gt;
+&lt;li&gt;方法区常量引用的对象&lt;/li&gt;
+&lt;li&gt;native方法引用的对象&lt;/li&gt;
+&lt;li&gt;其他，这里可以概括为虚拟机内部持有的对象，比如类加载器持有的对象，JMX持有的对象，甚至Synchronized持有的对象。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;h4 id=&#34;何为引用&#34;&gt;何为引用
+&lt;/h4&gt;&lt;p&gt;通过前面的介绍，我们发现一个很重要的概念，引用。引用描述了两个对象之间的持有关，它实际的定义是在JDK1.2后才定义的。我们把引用大致分为4类。&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;强引用 Strong Reference&lt;/p&gt;
+&lt;p&gt;只要强引用还在，对象就不能被回收。例如Object o = new Object();&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;软引用 Soft Reference&lt;/p&gt;
+&lt;p&gt;软引用是描述一些还有用但并非必须的对象，当JVM要发生内存溢出时，会把软引用关联的对象列入回收范围进行二次回收。如果还没有足够内存则抛出内存溢出异常。可以用SoftReference来描述软引用。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;弱引用 Weak Reference&lt;/p&gt;
+&lt;p&gt;弱引用关联的对象只能生存到下一次内存回收之前。当垃圾收集器工作时不论内存是否足够，都会回收掉弱引用对象。用WeakReference类实现软引用&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;虚引用 Phantom Reference&lt;/p&gt;
+&lt;p&gt;虚引用也被称为幽灵引用。一个对象是否有虚引用的存在，完全不影响其生存时间，因为无法通过虚引用来取得一个对象。使用PhantomReference来实现虚引用。&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;实际上引用的用法远不止这里说的确定两个对象之间的关系，比如Netty里使用WeakReference来检测内存泄漏。但是这不是重点，我们不展开介绍。&lt;/p&gt;
+&lt;h3 id=&#34;回收垃圾&#34;&gt;回收垃圾
+&lt;/h3&gt;&lt;h4 id=&#34;分代收集算法&#34;&gt;分代收集算法
+&lt;/h4&gt;&lt;p&gt;在介绍回收内存的方式之前我们先介绍分代收集算法，这也是现代虚拟机主要采用的收集算法。简单的说，根据对象的年龄对对象进行划分，年龄比较短的对象被存放在新生代（young 区域），年龄比较大的对象存放到老年代（old 区域）。一般计算对象年龄的方式是根据对象经过的垃圾回收次数，比如每次经过垃圾回收就将对象年龄+1岁。在HotSpot中，默认是对象经过15次垃圾回收还存活就会被转移到老年代，当然这个年龄是可以设置的。分带算法对垃圾回收算法影响很大，在接下来的介绍里，你将会看到不同的垃圾回收算法在不同算法的影响。&lt;/p&gt;
+&lt;h4 id=&#34;标记清除算法&#34;&gt;标记清除算法
+&lt;/h4&gt;&lt;p&gt;标记清除算法的思路很朴素，算法分为标记和清除阶段。首先标记出所有需要回收的对象，在标记完成后统一回收被标记的对象。标记方式和可达性分析一致。但这么做容易产生大量内存不连续的碎片，导致后续虚拟机分配内存时没有足够的连续空间不得不触发下一次GC。
+&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E6%A0%87%E8%AE%B0%E6%B8%85%E9%99%A4%E7%AE%97%E6%B3%95.jpg&#34;
+	width=&#34;1278&#34;
+	height=&#34;481&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E6%A0%87%E8%AE%B0%E6%B8%85%E9%99%A4%E7%AE%97%E6%B3%95_hu_b38eca1d343bd573.jpg 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E6%A0%87%E8%AE%B0%E6%B8%85%E9%99%A4%E7%AE%97%E6%B3%95_hu_5f122f3b7303451c.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;标记清除算法&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;265&#34;
+		data-flex-basis=&#34;637px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h4 id=&#34;复制算法&#34;&gt;复制算法
+&lt;/h4&gt;&lt;p&gt;复制算法是标记清除算法的改进版本，它将内存划分为大小相等的两块每次只使用其中一块。当这一块内存用完了，还存活的对象就被复制到另一块上面，然后再把以使用过的内存空间清理掉。这样每次都只对一半的区域进行回收，也不用考虑分配内存时内存不连续的问题，每次回收完毕都可以得到完整连续的内存区域。但是运行内存缩小为了原来的一半，代价太高。但是有办法改进。&lt;/p&gt;
+&lt;p&gt;现在的商业虚拟机都是采用这种算法，IBM研究过新生代中的对象99%都是朝生夕死，所以并不需要按照1：1的比例来划分空间，而是把内存划分为一块较大的Eden区域和两块较小的Survivor区域，分别称为Eden区，From Survivor区，To Survivor区。每次使用Eden和一块From Survivor区域。回收时将Eden和From Survivor区域中还存活的对象复制到另一块To Survivor中，然后清理掉Eden和From Survivor区域。
+HotSpot虚拟机的默认Eden和From Survivor，To Survivor区大小比例8：1：1，每次新生代可用内存占用整个新生代的90%。这里面有个问题，如果回收后需要转移到To Survivor区域的对象超过了To Survivor的容量，即当To Survivor不够时，需要老年代进行内存担保，将一些对象晋升老年代。&lt;/p&gt;
+&lt;p&gt;这里我画图并没有按照8:1:1的比例画，因为太难了，大家主要是理解复制算法的思想即可。
+&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E5%A4%8D%E5%88%B6%E7%AE%97%E6%B3%95.jpg&#34;
+	width=&#34;1414&#34;
+	height=&#34;1337&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E5%A4%8D%E5%88%B6%E7%AE%97%E6%B3%95_hu_172a6fdb6b2bd383.jpg 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E5%A4%8D%E5%88%B6%E7%AE%97%E6%B3%95_hu_eb8ec374a482f76c.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;复制算法&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;105&#34;
+		data-flex-basis=&#34;253px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h4 id=&#34;标记整理算法&#34;&gt;标记整理算法
+&lt;/h4&gt;&lt;p&gt;从对复制算法的介绍来看，复制算法有两个不足。&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;当垃圾回收后存在大量的存活对象时，会花费很多时间做内存拷贝。&lt;/li&gt;
+&lt;li&gt;更重要的是，为了避免只使用可用内存的50%导致浪费内存，必须能够有额外的空间保证回收后当存活对象的内存大于互备空间时进行空间分配担保。如果没有额外的空间担保，那么很可能本次垃圾回收会失败。&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;很明显老年代存活的对象即是存活周期很长的对象，又没有额外的空间来给老年代做担保，所以我们还需要另外的算法来回收老年代。
+老年代一般采用标记整理算法。这个算法的思路也比较朴素，首先标记出所有存活的对象，然后将存活的对象往一端移动，最后直接回收掉边界以外的内存。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E6%A0%87%E8%AE%B0%E6%95%B4%E7%90%86%E7%AE%97%E6%B3%95.jpg&#34;
+	width=&#34;1780&#34;
+	height=&#34;617&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E6%A0%87%E8%AE%B0%E6%95%B4%E7%90%86%E7%AE%97%E6%B3%95_hu_7cf1b0e06d2dcfea.jpg 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E6%A0%87%E8%AE%B0%E6%95%B4%E7%90%86%E7%AE%97%E6%B3%95_hu_30d2b5e81cc0e5e8.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;标记整理算法&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;288&#34;
+		data-flex-basis=&#34;692px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h2 id=&#34;hotspot的垃圾回收设计&#34;&gt;HotSpot的垃圾回收设计
+&lt;/h2&gt;&lt;p&gt;正如我一开始说的，《java虚拟机规范》只是一个规范，并不强制。jvm团队可以根据自己的需要设计虚拟机。接下来我们从HotSpot这款垃圾收集器来了解了在上面的垃圾回收指导思想下，一些实际的设计点。当然这里的设计点可能需要实际的结合具体的垃圾回收器才能彻底的理解，但是这里我还是先做一个介绍。&lt;/p&gt;
+&lt;h3 id=&#34;根节点枚举&#34;&gt;根节点枚举
+&lt;/h3&gt;&lt;p&gt;从可达性分析算法来看，我们识别垃圾的步骤就是找到所有从GC Roots出发可达的对象，但是找到哪些对象是GC Roots却并非易事。如果只是逐个检查方法区和常量池等内存区域，把所有对象都遍历一遍，那么这个效果肯定低效的令人发指，因为枚举GC Roots这一步是伴随着STW (STOP THE WORLD，意思是暂停所有除垃圾回收器以外的线程，这么做是为了保证识别出的GC Roots准确，不会被用户线程改变引用)。
+HotSpot采用一种被称为OopMap的结构来加速枚举GC Roots过程。当一个对象被加载完毕后，对象内什么位置是什么数据就会被记录下来，还会记录下栈和寄存器里的内存引用位置，这么做就避免了扫描方法区所有对象的过程。&lt;/p&gt;
+&lt;h3 id=&#34;安全点&#34;&gt;安全点
+&lt;/h3&gt;&lt;p&gt;有了Oop Map，我们就能快速完成GC Roots枚举，但是如果每次内存的引用变更都生成一次Oop Map，那么效率还是很低。。所以JVM要求生成Oop Map的位置只能在安全点生成，安全点生成的位置要求满足&amp;quot;能够让程序长时间执行的特征&amp;quot;。我们对生成安全点的期望是既不会间隔太长导致垃圾回收器等待，也不会间隔太短会导致运行时的回收开销太大。一般的安全点在方法调用，循环，异常跳转等位置。&lt;/p&gt;
+&lt;h3 id=&#34;安全区&#34;&gt;安全区
+&lt;/h3&gt;&lt;p&gt;安全区的定义与安全点类似，安全区是指引用关系在一段代码内引用关系没发生改变。可以吧安全区看做是安全点的拉伸。&lt;/p&gt;
+&lt;h1 id=&#34;垃圾回收器介绍&#34;&gt;垃圾回收器介绍
+&lt;/h1&gt;&lt;p&gt;有了前面的理论铺垫，接下来我们正式开始学习实际垃圾回收器。&lt;/p&gt;
+&lt;h2 id=&#34;serial搜集器&#34;&gt;Serial搜集器
+&lt;/h2&gt;&lt;p&gt;jdk最老的收集器，单线程运行，运行期间会暂停JVM中所有工作线程(STW)。虽然听起来让人难以接受，但仍然是Client模式下的新生代默认收集器，因为它的简单高效，开销极小。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/serial%E6%94%B6%E9%9B%86%E5%99%A8-1704377701761.jpg&#34;
+	width=&#34;1703&#34;
+	height=&#34;719&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/serial%E6%94%B6%E9%9B%86%E5%99%A8-1704377701761_hu_bb2e0dc95776e02e.jpg 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/serial%E6%94%B6%E9%9B%86%E5%99%A8-1704377701761_hu_c78fd45915c7f466.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;serial收集器&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;236&#34;
+		data-flex-basis=&#34;568px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h2 id=&#34;serial-old收集器&#34;&gt;Serial Old收集器
+&lt;/h2&gt;&lt;p&gt;它是Serial收集器的老年代版本，同样是单线程收集器。使用标记整理算法。这个收集器的主要作用是在Client模式下给虚拟机使用。在Server模式下还可以配合Parallel Scavenge使用。还有就是作为CMS收集器的后备方案，当CMS收集器发生Concurrent Mode Failure时使用它来回收老年代。这个知识点我们在后续CMS收集器里详细介绍。
+额外提一下，Parallel Scavenge其实有一个老年代版本叫PS MarkSweep，但是PS MarkSweep的实现和Serial Old基本一样，所以这里只介绍Serial Old收集器。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/serial%E6%94%B6%E9%9B%86%E5%99%A8-1704377692431.jpg&#34;
+	width=&#34;1703&#34;
+	height=&#34;719&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/serial%E6%94%B6%E9%9B%86%E5%99%A8-1704377692431_hu_5d4c69801c6d39c5.jpg 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/serial%E6%94%B6%E9%9B%86%E5%99%A8-1704377692431_hu_d398ffd534aaa870.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;serial收集器&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;236&#34;
+		data-flex-basis=&#34;568px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h2 id=&#34;parnew收集器&#34;&gt;ParNew收集器
+&lt;/h2&gt;&lt;p&gt;Serial收集器的多线程版本。虽然并没有什么创新之处，但它仍是JDK1.7 Server模式下新生代的首选收集器。除了性能之外很重要的原因就是他和Serial能配合CMS收集器工作。
+注意，在单核环境下ParNew并不比Serial强。&lt;/p&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/ParNew%E6%94%B6%E9%9B%86%E5%99%A8.jpg&#34;
+	width=&#34;1017&#34;
+	height=&#34;719&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/ParNew%E6%94%B6%E9%9B%86%E5%99%A8_hu_db0371efb14a53e7.jpg 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/ParNew%E6%94%B6%E9%9B%86%E5%99%A8_hu_e473201917c5dd14.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;ParNew收集器&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;141&#34;
+		data-flex-basis=&#34;339px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;h2 id=&#34;parallel-scavenge-收集器&#34;&gt;Parallel Scavenge 收集器
+&lt;/h2&gt;&lt;p&gt;使用多线程的新生代收集器，也被称为吞吐量优先收集器，它更关注达到可控的吞吐量(Throughput)，一般的垃圾收集器的设计思想则是想要达到一个比较短的停顿时间，比如CMS。吞吐量 = 运行用户代码时间/(运行用户代码时间+垃圾收集器时间)，停顿时间越短越适合需要与用户交互的程序。他有两个比较重要的参数&lt;/p&gt;
+&lt;ul&gt;
+&lt;li&gt;
+&lt;p&gt;-XX:MaxGCPauseMillis 设置最大垃圾收集停顿时间，单位毫秒。收集器将尽可能保证内存回收花费的时间小于该值。这个值不是设置的越小越好。因为GC时间缩短其实是靠减小新生代空间来实现的，但是减小新生代空间同时会导致以前1次能容纳并且GC的对象现在需要2次GC才能容纳&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;-XX:GCTimeRatio 直接设置吞吐量大小，其实是吞吐量的倒数，即垃圾收集器占总时间的时间比率取值(0-100)。如果设置为19，则运行垃圾回收器的时间只能占整体时间的5%，即1/(1+19)。默认值99，即要求垃圾回收器的工作时间只能占用整体时间的1%。&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ul&gt;
+&lt;p&gt;Parallel Scavenge收集器还有一个可选参数-XX:+useAdaptiveSizePolicy，这个开关打开后就不需要指定新生代的小-Xmn,Eden和Survivor的比例（-XX:SurvivoRatio）,晋升老年代对象年龄-XX:PretenureSizeThreshold等参数。虚拟机会根据系统运行状况进行性能监控信息，自动调整这些参数以提供最适合的停顿时间或者最大吞吐量，这种调节方式称为GC自适应调节策略。&lt;/p&gt;
+&lt;h2 id=&#34;parallel-old收集器&#34;&gt;Parallel Old收集器
+&lt;/h2&gt;&lt;p&gt;Parallel Old是ParNew收集器的老年代版本，使用多线程+标记整理算法。主要用来和Parallel Scavenge配合使用达到一个可控的吞吐量。在注重吞吐量和资源敏感的场合适用。这个收集器在JDK1.6才正式提供，所以在JDK1.6之前只能使用Parallel Scavenge + Serial Old的搭配回收内存，但是在一些老年代内存空间比较大的场景下，因为Serial Old收集器本身的性能原因，导致这个组合的的吞吐性能并不高，甚至比不过ParNew+CMS的组合。这个现象直到Parallel Old收集器诞生才改善。&lt;/p&gt;
+&lt;h2 id=&#34;cmsconcurrent-mark-sweep收集器&#34;&gt;CMS(Concurrent Mark Sweep)收集器
+&lt;/h2&gt;&lt;p&gt;CMS是作用于老年代的收集器，基于标记-清除算法实现。它的设计目标是为了尽可能的降低停顿时间，在一些常见的网络服务器上，很适合使用它。开启方法-XX:+UseConcMarkSweepGC，它回收过程包含4个步骤。&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;初始标记（CMS initial mark）&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;并发标记（CMS concurrent mark）&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;重新标记（CMS remark）&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;并发清楚（CMS consurrent sweep）&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;其中初始标记和重新标记任然要暂停所有线程，但是时间很短。初始标记仅仅记录下GC Roots直接关联到的对象，速度很快。并发标记就是GC Roots Tracing的过程，这个过程用户线程和垃圾回收线程并发运行。而重新并发标记则是为了修正并发标记期间因为用户线程继续运作导致的标记产生变动的标记记录，这个阶段停顿的时间一般会比初始标记阶段稍长，但远比并发标记的时间短。整个过程耗时最长的并发标记和并发清楚过程都是收集器和用户线程一起运行的。（并发是指多个线程交替执行）&lt;/p&gt;
+&lt;p&gt;CMS收集器是JVM第一次尝试减少STW的时间并且取得了比较好的效果，一些文档甚至把CMS收集器称为&amp;quot;并发低停顿收集器&amp;quot;。但CMS收集器并不是完美的，它有3个明显的缺点：&lt;/p&gt;
+&lt;ol&gt;
+&lt;li&gt;
+&lt;p&gt;对CPU资源敏感，CMS默认启动的回收线程是(CPU数量+3)/4，也就是说当CPU在4个以上时，并发回收时垃圾收集线程不少于25%的CPU资源。但当Cpu不足4个时,CMS对用户的影响就可能变大，如果本来CPU负载就比较大，还要分出一部分算力区执行收集器线程，那么就可能导致用户程序的执行速度骤降。为了应付这种情况，JVM提供了一种称为”增量式并发收集器（Icrremental Concurrent Mark Sweep/i-CMS）”的变种，它的不同之处是在并发标记，并发清除时让GC线程，用户线程交替运行，拉长垃圾回收的时间，这样对用户的影响就会少一些(用户感觉变的不那么慢，但是不那么慢的时间变得更长)。但实际上，增量CMS收集器效果很一般。在JDK9里增量并发收集器已经被废弃了。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;CMS收集器无法处理浮动垃圾（Floating Garbage），可能会出现Concurrent Mode Failure失败而导致一次完全STW的Full GC的产生。当CMS并发清理阶段用户线程还在产产生垃圾，这部分垃圾出现在标记过程之后，无法被CMS处理，只能等到下一次GC时再清理。这一部分垃圾被称为浮动垃圾。也是由于垃圾收集器工作时用户线程还在运行，那么需要足够的内存空间给用户线程使用，因此垃圾收集器不能像其他收集器那样等到老年代快满了才进行垃圾回收，因为还需要一部分空间提供并发收集器运行。在JDK1.5下，当老年代使用了68% CMS就会被激活，这是一个偏保守的设置，如果老年代增长不是特别快可以适当调高参数-XX：CMSInitiatingOccupancyFraction的值来提高出发百分比，以便降低内存回收次数获得更好的性能。在JDK1.6时这个值提升至92%。要是CMS运行期间预留的内存无法满足CMS的运行需要时就会触发Concurrent Mode Filure ,这是JVM就启动后背预案，临时启用Serial Old收集器来进行老年代垃圾收集，这样停顿时间就很长，所以说参数-XX:CMSInitiaingOccupancyFraction设置太高容易导致大量的Concurrent Mode Failure，性能反而更低。&lt;/p&gt;
+&lt;/li&gt;
+&lt;li&gt;
+&lt;p&gt;CMS收集器还有个缺点，因为它是基于标记清除算法实现的收集器，导致在收集结束时会产生大量的空间碎片，碎片过多导致大对象分配无法找到连续的空间不得不进行一次Full GC。为了解决这个问题,CMS提供了一个参数-XX:+UseCMSCompactAtFullCollection开关（默认开启），在CMS收集器快要进行FullGC时开启内存碎片整理，但整理过程需要移动存活对象无法并发，停顿时间不得不变长。为此，CMS还提供了另一个参数-XX:CMSFullGCsBeforeCompaction,这个参数是设置执行多少次不压缩的FullGC后跟着来一次带压缩（碎片整理）的，默认值为0，表示每次Full GC时都进行碎片整理。但是这两个参数在JDK9的时候也废弃了。&lt;/p&gt;
+&lt;/li&gt;
+&lt;/ol&gt;
+&lt;p&gt;&lt;img src=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/CMS%E6%94%B6%E9%9B%86%E5%99%A8-1704378600795.jpg&#34;
+	width=&#34;2028&#34;
+	height=&#34;719&#34;
+	srcset=&#34;http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/CMS%E6%94%B6%E9%9B%86%E5%99%A8-1704378600795_hu_38af4217ea016d28.jpg 480w, http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/CMS%E6%94%B6%E9%9B%86%E5%99%A8-1704378600795_hu_80a221cca0e8ccc4.jpg 1024w&#34;
+	loading=&#34;lazy&#34;
+	
+		alt=&#34;CMS收集器&#34;
+	
+	
+		class=&#34;gallery-image&#34; 
+		data-flex-grow=&#34;282&#34;
+		data-flex-basis=&#34;676px&#34;
+	
+&gt;&lt;/p&gt;
+&lt;hr&gt;
+&lt;p&gt;华丽分割线&lt;/p&gt;
+&lt;hr&gt;
+&lt;p&gt;到目前为止其实我们还是主要关注在垃圾回收器的理论，并没有实际的介绍垃圾回收器的回收细节。以目前的环境来看，只知道这些去面试肯定是不够的，而且还有最关键的垃圾回收器G1，ZGC，日志等信息我们都没有做讲解。大家放心，这些内容后续肯定会讲，不过文章如果太长反而会影响大家的阅读兴趣，所以垃圾回收器的内容我打算拆成上下两篇。在下篇文章里我会详细介绍G1和ZGC，以及GC日志的知识。大家敬请期待。&lt;/p&gt;
+</description>
+        </item>
+        
+    </channel>
+</rss>

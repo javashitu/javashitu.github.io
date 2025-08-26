@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="zh-cn" dir="ltr">
+    <head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'><meta name='description' content="学习背景 在正式开始垃圾回收器的知识学习之前，我们要先介绍一下本次学习的主要目标。\n大部分人，包括我自己学习垃圾回收器的主要目标就是因为这个知识点实在是太重要了，而且很少有系统并且全面的介绍，系统并且全面的程度至少要足够应付面试。哈哈，面向面试学习。\n本章节的学习目标主要是介绍各个垃圾回收器的实现思想，以及部分垃圾回收器的实现原理。为了方便各位阅读，这里再介绍一下一些术语\nJVM java virtual machine， java虚拟机的缩写 STW Stop the world，指垃圾回收器回收垃圾过程中，暂停整个JVM中用户程序的过程 垃圾回收器是什么 在回答这个问题之前，我们先回顾一下java语言的特性-内存安全。程序员不需要手动释放内存，内存分配以及回收全部交给垃圾回收器完成。这句话概括了垃圾回收器的职责，但是不够具体。垃圾回收器作为JVM的一个模块，应该是更加具体，有实际的物理指代的实体。当然，从JVM的发展史，以及生态来说，不同的JVM实现有不同的垃圾回收器，甚至在一个JVM实现里有多个垃圾回收器(这种做法也是比较主流的JVM的垃圾回收器实现做法)。不同的垃圾回收器针对被回收对象的特点选择合适的算法，以及内存分配方式管理内存，帮助我们高效的使用JVM。在正式开始垃圾回收器的介绍之前，我先介绍一下比较重要的几个JVM实现，以及历史上的JVM实现，因为我们要学习的垃圾回收器，其理论实现也是由这些JVM完成的。\nSun Classic 伴随着JDK1.0发布的第一款商用虚拟机，目前已经退出舞台。 HotSpot VM 虚拟机领域的王者，可以说是目前使用最广泛的jvm。虽然这款JVM是目前JAVA服务器领域使用最广泛的实现，但是它一开始并不是为java语言设计的，甚至不是SUN公司设计的。HotSpot一开始由一家小公司&quot;Longview Technologies&quot;设计，Sun公司注意到这款JVM的很多设计非常可圈可点，于是收购了这家公司。当然后来SUN又被Oracle收购了，现在HotSpot的实现由Oracel负责。 JRockit 由BEA System实现，在JVM内部大量使用即时编译技术，曾经号称&quot;世界上运行最快的JVM&quot;。后来也被Oracle收购了(怎么哪里都有你，oracle!)，现在已经不再发展。 IBM J9 IBM主力发展的JVM，曾经和HotSpot，JRockit并称JVM三雄。后来被IBM捐给Eclipse基金会，实际上Eclipse也是IBM成立的，不过是单独运作。 在后面的垃圾回收器的理论学习里，我们将主要选择HotSpot的实现来讨论。\nJVM内存区域 在讨论垃圾回收器之前，还需要了解JVM的内存布局，了解内存布局能帮助我们更好的理解垃圾回收器的工作机制，不仅仅是垃圾回收器的工作机制，后续的编译器的知识也需要提前了解jvm内存布局。根据《java虚拟机规范》jvm的内存布局分为下面几个部分。\n![jvm内存布局](E:\\blog\\my-blog\\2023-12-30 jvm垃圾回收器理论/jvm垃圾回收器上篇.assets/jvm内存布局.jpg)\n看到这一坨不知道是做什么的区域划分是不是一脸懵逼，不要急，等我慢慢解释。\n程序计数器 在jvm运行过程中，往往需要从一个线程切换到另外一个线程。但是实际上，物理意义上一个cpu核心一个时刻只能有一个线程在运行。那么jvm为了实现看起来在&quot;一个时刻&quot;，比如说&quot;1秒钟&quot;内运行多个线程这种效果。本质就是通过在多个线程之间切换跳转完成的。程序计数器是一块线程私有的区域，他的作用就是用来记录当前线程执行的指令位置。(这里的知识如果了解操作系统关于CPU调度时间片的理论的话，理解起来会更加形象) 虚拟机栈 jvm的运行是基于字节码指令来完成的，关于字节码指令运行的细节以及指令之间切换的过程很复杂，在后续关于编译器的内容里我们再细说。这里大家有个大概的概念即可，所有指令按照后进先出的方式排队(也被称为压栈)，虚拟机栈就是来记录每条指令的，每当一条指令被执行完毕，这条指令就从栈中移除，被称为弹栈。这里只是一个大概的描述，实际上虚拟机栈里除了存储指令还存储了指令需要使用的变量(局部变量表)，方法的返回地址，方法出口等信息。简单的理解就是为了执行这条指令所必须得参数以及返回值地址等信息。 native栈 也被称为本地方法栈，结构和虚拟机栈类似。区别是虚拟机栈是为了执行java方法的，但是本地方法栈则是为了执行非java方法的。比如USafe工具，里面的方法大部分都是native的，用native标记。 堆 jvm中内存最大的区域，也是存放数组和对象的位置。也是我们今天要讲的垃圾回收器的主要工作区域。在很多描述垃圾回收的理论里常出现&quot;新生代&quot;，&ldquo;老年代&quot;的概念。其实所谓新生代，老年代都是指的堆中的内存，只不过按照不同的划分方式划分。堆中的内存可以认为几乎是所有线程共享的，但不是全部。因为在实际的内存分配时，为了加速线程访问速度，每个线程在堆上还有一小块私有区域，叫做TLAB(Thread Local Allocation Buffer)。试想一下，假设没有这个TLAB区域，每个线程随机访问内存，那么很容易就产生线程竞争，拖慢线程访问速度。 方法区 方法区是存放被编译后的类信息，常量，静态变量等信息。方法区本质也是堆的一部分，但是因为它的重要性还是把它与堆区分开来。说到方法区，还要提到一个概念&quot;永久代&rdquo;。以HotSpot为例，在JDK7之前，HotSpot是使用永久代来实现方法区。具体做法是让垃圾回收器管理像管理堆一样管理这部分内存，这样就省去了专门为方法区编写内存管理代码的工作。但是同时期的一些JVM，比如J9，JRocikt是不存在永久代的概念的。这里就能看出来《java虚拟机规范》只是一个规范，具体的实现则掌握在开发团队手里。长久来看这种做法并不是一个好主意，因为这会导致内存溢出的风险，所以HotSpot团队在JDK7版本彻底放弃了永久代的概念，将原本永久代拆分成方法区和常量池。 运行时常量池 运行时常量池是方法区的一部分，用来存放类被编译后的常量，但是这个常量池也可以在运行时动态增加，比如String的intern方法就可以添加新的常量 直接内存 这一块内存不属于JVM运行时内存的部分，但是也可能被经常使用，比如NIO库中的DirectByteBuffer就是操作的直接内存，大名鼎鼎的Netty的ByteBuf也是使用的直接内存。 好吧前面我们叨逼叨了这么久，总算是快进入到正题了，但最后容许我再叨逼叨一点。实际上最好再讲讲对象创建以及对象内存布局的内容，但是如果继续铺垫，就显得&quot;前奏&quot;太冗长，所以这部分内容等后面讲编译器相关内容的时候我再拿出来详细介绍。\n垃圾回收理论 指导思想 设想一下，要回收一个对象，要怎么回收。大致上我们可以分为两步。\n确定那些对象需要回收-识别垃圾 将需要回收的对象所在的内存置空-回收垃圾 我们分别以这两个步骤来介绍垃圾回收器的设计思想。 识别垃圾 引用计数算法 假如我有一个额外的区域，里面记录了每个对象被引用的次数。比如objectA = 2;表示有两个对象引用了objectA对象。 每当有其他对象引用obecjtA，比如objectB.a = objectA时就将引用次数+1，当引用失效时引用-1(包括释放引用objectB.a=null以及持有引用的objectB被销毁)。当objectA的被引用次数归零时，说明没有其他对象再objectA，这时就可以销毁objectA。 这时一种很朴素的思路，也是很多软件采取的垃圾回收方式，比如FlashPlayer，Python，Redis里都有使用这个算法。但是java里主流的JVM都没有采用这种算法，因为它很难处理循环引用的情况，需要编写额外的代码。 一个简单的循环引用的例子\n">
+<title>jvm垃圾回收器前篇</title>
+
+<link rel='canonical' href='http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/'>
+
+<link rel="stylesheet" href="/scss/style.min.946cca6c6259ef94ac55abfae7c7bf3291ea3ed5eea17ef77500b257217c6710.css"><meta property='og:title' content="jvm垃圾回收器前篇">
+<meta property='og:description' content="学习背景 在正式开始垃圾回收器的知识学习之前，我们要先介绍一下本次学习的主要目标。\n大部分人，包括我自己学习垃圾回收器的主要目标就是因为这个知识点实在是太重要了，而且很少有系统并且全面的介绍，系统并且全面的程度至少要足够应付面试。哈哈，面向面试学习。\n本章节的学习目标主要是介绍各个垃圾回收器的实现思想，以及部分垃圾回收器的实现原理。为了方便各位阅读，这里再介绍一下一些术语\nJVM java virtual machine， java虚拟机的缩写 STW Stop the world，指垃圾回收器回收垃圾过程中，暂停整个JVM中用户程序的过程 垃圾回收器是什么 在回答这个问题之前，我们先回顾一下java语言的特性-内存安全。程序员不需要手动释放内存，内存分配以及回收全部交给垃圾回收器完成。这句话概括了垃圾回收器的职责，但是不够具体。垃圾回收器作为JVM的一个模块，应该是更加具体，有实际的物理指代的实体。当然，从JVM的发展史，以及生态来说，不同的JVM实现有不同的垃圾回收器，甚至在一个JVM实现里有多个垃圾回收器(这种做法也是比较主流的JVM的垃圾回收器实现做法)。不同的垃圾回收器针对被回收对象的特点选择合适的算法，以及内存分配方式管理内存，帮助我们高效的使用JVM。在正式开始垃圾回收器的介绍之前，我先介绍一下比较重要的几个JVM实现，以及历史上的JVM实现，因为我们要学习的垃圾回收器，其理论实现也是由这些JVM完成的。\nSun Classic 伴随着JDK1.0发布的第一款商用虚拟机，目前已经退出舞台。 HotSpot VM 虚拟机领域的王者，可以说是目前使用最广泛的jvm。虽然这款JVM是目前JAVA服务器领域使用最广泛的实现，但是它一开始并不是为java语言设计的，甚至不是SUN公司设计的。HotSpot一开始由一家小公司&quot;Longview Technologies&quot;设计，Sun公司注意到这款JVM的很多设计非常可圈可点，于是收购了这家公司。当然后来SUN又被Oracle收购了，现在HotSpot的实现由Oracel负责。 JRockit 由BEA System实现，在JVM内部大量使用即时编译技术，曾经号称&quot;世界上运行最快的JVM&quot;。后来也被Oracle收购了(怎么哪里都有你，oracle!)，现在已经不再发展。 IBM J9 IBM主力发展的JVM，曾经和HotSpot，JRockit并称JVM三雄。后来被IBM捐给Eclipse基金会，实际上Eclipse也是IBM成立的，不过是单独运作。 在后面的垃圾回收器的理论学习里，我们将主要选择HotSpot的实现来讨论。\nJVM内存区域 在讨论垃圾回收器之前，还需要了解JVM的内存布局，了解内存布局能帮助我们更好的理解垃圾回收器的工作机制，不仅仅是垃圾回收器的工作机制，后续的编译器的知识也需要提前了解jvm内存布局。根据《java虚拟机规范》jvm的内存布局分为下面几个部分。\n![jvm内存布局](E:\\blog\\my-blog\\2023-12-30 jvm垃圾回收器理论/jvm垃圾回收器上篇.assets/jvm内存布局.jpg)\n看到这一坨不知道是做什么的区域划分是不是一脸懵逼，不要急，等我慢慢解释。\n程序计数器 在jvm运行过程中，往往需要从一个线程切换到另外一个线程。但是实际上，物理意义上一个cpu核心一个时刻只能有一个线程在运行。那么jvm为了实现看起来在&quot;一个时刻&quot;，比如说&quot;1秒钟&quot;内运行多个线程这种效果。本质就是通过在多个线程之间切换跳转完成的。程序计数器是一块线程私有的区域，他的作用就是用来记录当前线程执行的指令位置。(这里的知识如果了解操作系统关于CPU调度时间片的理论的话，理解起来会更加形象) 虚拟机栈 jvm的运行是基于字节码指令来完成的，关于字节码指令运行的细节以及指令之间切换的过程很复杂，在后续关于编译器的内容里我们再细说。这里大家有个大概的概念即可，所有指令按照后进先出的方式排队(也被称为压栈)，虚拟机栈就是来记录每条指令的，每当一条指令被执行完毕，这条指令就从栈中移除，被称为弹栈。这里只是一个大概的描述，实际上虚拟机栈里除了存储指令还存储了指令需要使用的变量(局部变量表)，方法的返回地址，方法出口等信息。简单的理解就是为了执行这条指令所必须得参数以及返回值地址等信息。 native栈 也被称为本地方法栈，结构和虚拟机栈类似。区别是虚拟机栈是为了执行java方法的，但是本地方法栈则是为了执行非java方法的。比如USafe工具，里面的方法大部分都是native的，用native标记。 堆 jvm中内存最大的区域，也是存放数组和对象的位置。也是我们今天要讲的垃圾回收器的主要工作区域。在很多描述垃圾回收的理论里常出现&quot;新生代&quot;，&ldquo;老年代&quot;的概念。其实所谓新生代，老年代都是指的堆中的内存，只不过按照不同的划分方式划分。堆中的内存可以认为几乎是所有线程共享的，但不是全部。因为在实际的内存分配时，为了加速线程访问速度，每个线程在堆上还有一小块私有区域，叫做TLAB(Thread Local Allocation Buffer)。试想一下，假设没有这个TLAB区域，每个线程随机访问内存，那么很容易就产生线程竞争，拖慢线程访问速度。 方法区 方法区是存放被编译后的类信息，常量，静态变量等信息。方法区本质也是堆的一部分，但是因为它的重要性还是把它与堆区分开来。说到方法区，还要提到一个概念&quot;永久代&rdquo;。以HotSpot为例，在JDK7之前，HotSpot是使用永久代来实现方法区。具体做法是让垃圾回收器管理像管理堆一样管理这部分内存，这样就省去了专门为方法区编写内存管理代码的工作。但是同时期的一些JVM，比如J9，JRocikt是不存在永久代的概念的。这里就能看出来《java虚拟机规范》只是一个规范，具体的实现则掌握在开发团队手里。长久来看这种做法并不是一个好主意，因为这会导致内存溢出的风险，所以HotSpot团队在JDK7版本彻底放弃了永久代的概念，将原本永久代拆分成方法区和常量池。 运行时常量池 运行时常量池是方法区的一部分，用来存放类被编译后的常量，但是这个常量池也可以在运行时动态增加，比如String的intern方法就可以添加新的常量 直接内存 这一块内存不属于JVM运行时内存的部分，但是也可能被经常使用，比如NIO库中的DirectByteBuffer就是操作的直接内存，大名鼎鼎的Netty的ByteBuf也是使用的直接内存。 好吧前面我们叨逼叨了这么久，总算是快进入到正题了，但最后容许我再叨逼叨一点。实际上最好再讲讲对象创建以及对象内存布局的内容，但是如果继续铺垫，就显得&quot;前奏&quot;太冗长，所以这部分内容等后面讲编译器相关内容的时候我再拿出来详细介绍。\n垃圾回收理论 指导思想 设想一下，要回收一个对象，要怎么回收。大致上我们可以分为两步。\n确定那些对象需要回收-识别垃圾 将需要回收的对象所在的内存置空-回收垃圾 我们分别以这两个步骤来介绍垃圾回收器的设计思想。 识别垃圾 引用计数算法 假如我有一个额外的区域，里面记录了每个对象被引用的次数。比如objectA = 2;表示有两个对象引用了objectA对象。 每当有其他对象引用obecjtA，比如objectB.a = objectA时就将引用次数+1，当引用失效时引用-1(包括释放引用objectB.a=null以及持有引用的objectB被销毁)。当objectA的被引用次数归零时，说明没有其他对象再objectA，这时就可以销毁objectA。 这时一种很朴素的思路，也是很多软件采取的垃圾回收方式，比如FlashPlayer，Python，Redis里都有使用这个算法。但是java里主流的JVM都没有采用这种算法，因为它很难处理循环引用的情况，需要编写额外的代码。 一个简单的循环引用的例子\n">
+<meta property='og:url' content='http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/'>
+<meta property='og:site_name' content='javashitu'>
+<meta property='og:type' content='article'><meta property='article:section' content='Post' /><meta property='article:tag' content='jvm' /><meta property='article:tag' content='垃圾回收器' /><meta property='article:published_time' content='2023-12-30T00:00:00&#43;00:00'/><meta property='article:modified_time' content='2023-12-30T00:00:00&#43;00:00'/><meta property='og:image' content='http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/cover.jpg' />
+<meta name="twitter:title" content="jvm垃圾回收器前篇">
+<meta name="twitter:description" content="学习背景 在正式开始垃圾回收器的知识学习之前，我们要先介绍一下本次学习的主要目标。\n大部分人，包括我自己学习垃圾回收器的主要目标就是因为这个知识点实在是太重要了，而且很少有系统并且全面的介绍，系统并且全面的程度至少要足够应付面试。哈哈，面向面试学习。\n本章节的学习目标主要是介绍各个垃圾回收器的实现思想，以及部分垃圾回收器的实现原理。为了方便各位阅读，这里再介绍一下一些术语\nJVM java virtual machine， java虚拟机的缩写 STW Stop the world，指垃圾回收器回收垃圾过程中，暂停整个JVM中用户程序的过程 垃圾回收器是什么 在回答这个问题之前，我们先回顾一下java语言的特性-内存安全。程序员不需要手动释放内存，内存分配以及回收全部交给垃圾回收器完成。这句话概括了垃圾回收器的职责，但是不够具体。垃圾回收器作为JVM的一个模块，应该是更加具体，有实际的物理指代的实体。当然，从JVM的发展史，以及生态来说，不同的JVM实现有不同的垃圾回收器，甚至在一个JVM实现里有多个垃圾回收器(这种做法也是比较主流的JVM的垃圾回收器实现做法)。不同的垃圾回收器针对被回收对象的特点选择合适的算法，以及内存分配方式管理内存，帮助我们高效的使用JVM。在正式开始垃圾回收器的介绍之前，我先介绍一下比较重要的几个JVM实现，以及历史上的JVM实现，因为我们要学习的垃圾回收器，其理论实现也是由这些JVM完成的。\nSun Classic 伴随着JDK1.0发布的第一款商用虚拟机，目前已经退出舞台。 HotSpot VM 虚拟机领域的王者，可以说是目前使用最广泛的jvm。虽然这款JVM是目前JAVA服务器领域使用最广泛的实现，但是它一开始并不是为java语言设计的，甚至不是SUN公司设计的。HotSpot一开始由一家小公司&quot;Longview Technologies&quot;设计，Sun公司注意到这款JVM的很多设计非常可圈可点，于是收购了这家公司。当然后来SUN又被Oracle收购了，现在HotSpot的实现由Oracel负责。 JRockit 由BEA System实现，在JVM内部大量使用即时编译技术，曾经号称&quot;世界上运行最快的JVM&quot;。后来也被Oracle收购了(怎么哪里都有你，oracle!)，现在已经不再发展。 IBM J9 IBM主力发展的JVM，曾经和HotSpot，JRockit并称JVM三雄。后来被IBM捐给Eclipse基金会，实际上Eclipse也是IBM成立的，不过是单独运作。 在后面的垃圾回收器的理论学习里，我们将主要选择HotSpot的实现来讨论。\nJVM内存区域 在讨论垃圾回收器之前，还需要了解JVM的内存布局，了解内存布局能帮助我们更好的理解垃圾回收器的工作机制，不仅仅是垃圾回收器的工作机制，后续的编译器的知识也需要提前了解jvm内存布局。根据《java虚拟机规范》jvm的内存布局分为下面几个部分。\n![jvm内存布局](E:\\blog\\my-blog\\2023-12-30 jvm垃圾回收器理论/jvm垃圾回收器上篇.assets/jvm内存布局.jpg)\n看到这一坨不知道是做什么的区域划分是不是一脸懵逼，不要急，等我慢慢解释。\n程序计数器 在jvm运行过程中，往往需要从一个线程切换到另外一个线程。但是实际上，物理意义上一个cpu核心一个时刻只能有一个线程在运行。那么jvm为了实现看起来在&quot;一个时刻&quot;，比如说&quot;1秒钟&quot;内运行多个线程这种效果。本质就是通过在多个线程之间切换跳转完成的。程序计数器是一块线程私有的区域，他的作用就是用来记录当前线程执行的指令位置。(这里的知识如果了解操作系统关于CPU调度时间片的理论的话，理解起来会更加形象) 虚拟机栈 jvm的运行是基于字节码指令来完成的，关于字节码指令运行的细节以及指令之间切换的过程很复杂，在后续关于编译器的内容里我们再细说。这里大家有个大概的概念即可，所有指令按照后进先出的方式排队(也被称为压栈)，虚拟机栈就是来记录每条指令的，每当一条指令被执行完毕，这条指令就从栈中移除，被称为弹栈。这里只是一个大概的描述，实际上虚拟机栈里除了存储指令还存储了指令需要使用的变量(局部变量表)，方法的返回地址，方法出口等信息。简单的理解就是为了执行这条指令所必须得参数以及返回值地址等信息。 native栈 也被称为本地方法栈，结构和虚拟机栈类似。区别是虚拟机栈是为了执行java方法的，但是本地方法栈则是为了执行非java方法的。比如USafe工具，里面的方法大部分都是native的，用native标记。 堆 jvm中内存最大的区域，也是存放数组和对象的位置。也是我们今天要讲的垃圾回收器的主要工作区域。在很多描述垃圾回收的理论里常出现&quot;新生代&quot;，&ldquo;老年代&quot;的概念。其实所谓新生代，老年代都是指的堆中的内存，只不过按照不同的划分方式划分。堆中的内存可以认为几乎是所有线程共享的，但不是全部。因为在实际的内存分配时，为了加速线程访问速度，每个线程在堆上还有一小块私有区域，叫做TLAB(Thread Local Allocation Buffer)。试想一下，假设没有这个TLAB区域，每个线程随机访问内存，那么很容易就产生线程竞争，拖慢线程访问速度。 方法区 方法区是存放被编译后的类信息，常量，静态变量等信息。方法区本质也是堆的一部分，但是因为它的重要性还是把它与堆区分开来。说到方法区，还要提到一个概念&quot;永久代&rdquo;。以HotSpot为例，在JDK7之前，HotSpot是使用永久代来实现方法区。具体做法是让垃圾回收器管理像管理堆一样管理这部分内存，这样就省去了专门为方法区编写内存管理代码的工作。但是同时期的一些JVM，比如J9，JRocikt是不存在永久代的概念的。这里就能看出来《java虚拟机规范》只是一个规范，具体的实现则掌握在开发团队手里。长久来看这种做法并不是一个好主意，因为这会导致内存溢出的风险，所以HotSpot团队在JDK7版本彻底放弃了永久代的概念，将原本永久代拆分成方法区和常量池。 运行时常量池 运行时常量池是方法区的一部分，用来存放类被编译后的常量，但是这个常量池也可以在运行时动态增加，比如String的intern方法就可以添加新的常量 直接内存 这一块内存不属于JVM运行时内存的部分，但是也可能被经常使用，比如NIO库中的DirectByteBuffer就是操作的直接内存，大名鼎鼎的Netty的ByteBuf也是使用的直接内存。 好吧前面我们叨逼叨了这么久，总算是快进入到正题了，但最后容许我再叨逼叨一点。实际上最好再讲讲对象创建以及对象内存布局的内容，但是如果继续铺垫，就显得&quot;前奏&quot;太冗长，所以这部分内容等后面讲编译器相关内容的时候我再拿出来详细介绍。\n垃圾回收理论 指导思想 设想一下，要回收一个对象，要怎么回收。大致上我们可以分为两步。\n确定那些对象需要回收-识别垃圾 将需要回收的对象所在的内存置空-回收垃圾 我们分别以这两个步骤来介绍垃圾回收器的设计思想。 识别垃圾 引用计数算法 假如我有一个额外的区域，里面记录了每个对象被引用的次数。比如objectA = 2;表示有两个对象引用了objectA对象。 每当有其他对象引用obecjtA，比如objectB.a = objectA时就将引用次数+1，当引用失效时引用-1(包括释放引用objectB.a=null以及持有引用的objectB被销毁)。当objectA的被引用次数归零时，说明没有其他对象再objectA，这时就可以销毁objectA。 这时一种很朴素的思路，也是很多软件采取的垃圾回收方式，比如FlashPlayer，Python，Redis里都有使用这个算法。但是java里主流的JVM都没有采用这种算法，因为它很难处理循环引用的情况，需要编写额外的代码。 一个简单的循环引用的例子\n"><meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content='http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/cover.jpg' />
+    </head>
+    <body class="
+    article-page
+    ">
+    <script>
+        (function() {
+            const colorSchemeKey = 'StackColorScheme';
+            if(!localStorage.getItem(colorSchemeKey)){
+                localStorage.setItem(colorSchemeKey, "auto");
+            }
+        })();
+    </script><script>
+    (function() {
+        const colorSchemeKey = 'StackColorScheme';
+        const colorSchemeItem = localStorage.getItem(colorSchemeKey);
+        const supportDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches === true;
+
+        if (colorSchemeItem == 'dark' || colorSchemeItem === 'auto' && supportDarkMode) {
+            
+
+            document.documentElement.dataset.scheme = 'dark';
+        } else {
+            document.documentElement.dataset.scheme = 'light';
+        }
+    })();
+</script>
+<div class="container main-container flex on-phone--column extended"><aside class="sidebar left-sidebar sticky ">
+    <button class="hamburger hamburger--spin" type="button" id="toggle-menu" aria-label="切换菜单">
+        <span class="hamburger-box">
+            <span class="hamburger-inner"></span>
+        </span>
+    </button>
+
+    <header>
+        
+            
+            <figure class="site-avatar">
+                <a href="/">
+                
+                    
+                    
+                    
+                        
+                        <img src="/img/javashitu_hu_4b8114d532ed8b7b.jpg" width="300"
+                            height="300" class="site-logo" loading="lazy" alt="Avatar">
+                    
+                
+                </a>
+                
+            </figure>
+            
+        
+        
+        <div class="site-meta">
+            <h1 class="site-name"><a href="/">javashitu</a></h1>
+            <h2 class="site-description">联系我请➕微信javashitu</h2>
+        </div>
+    </header><ol class="menu-social">
+            
+                <li>
+                    <a 
+                        href='https://github.com/javashitu'
+                        target="_blank"
+                        title="GitHub"
+                        rel="me"
+                    >
+                        
+                        
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-brand-github" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5" />
+</svg>
+
+
+
+                        
+                    </a>
+                </li>
+            
+        </ol><ol class="menu" id="main-menu">
+        
+        
+        
+        <li >
+            <a href='/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-home" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <polyline points="5 12 3 12 12 3 21 12 19 12" />
+  <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7" />
+  <path d="M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6" />
+</svg>
+
+
+
+                
+                <span>主页</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/%E5%85%B3%E4%BA%8E/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-user" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="7" r="4" />
+  <path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />
+</svg>
+
+
+
+                
+                <span>关于</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/archives/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-archive" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <rect x="3" y="4" width="18" height="4" rx="2" />
+  <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-10" />
+  <line x1="10" y1="12" x2="14" y2="12" />
+</svg>
+
+
+
+                
+                <span>Archives</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/search/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-search" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="10" cy="10" r="7" />
+  <line x1="21" y1="21" x2="15" y2="15" />
+</svg>
+
+
+
+                
+                <span>Search</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/links/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-link" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <path d="M10 14a3.5 3.5 0 0 0 5 0l4 -4a3.5 3.5 0 0 0 -5 -5l-.5 .5" />
+  <path d="M14 10a3.5 3.5 0 0 0 -5 0l-4 4a3.5 3.5 0 0 0 5 5l.5 -.5" />
+</svg>
+
+
+
+                
+                <span>Links</span>
+            </a>
+        </li>
+        
+        <li class="menu-bottom-section">
+            <ol class="menu">
+                    
+                        <li id="i18n-switch">  
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-language" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M4 5h7" />
+  <path d="M9 3v2c0 4.418 -2.239 8 -5 8" />
+  <path d="M5 9c-.003 2.144 2.952 3.908 6.7 4" />
+  <path d="M12 20l4 -9l4 9" />
+  <path d="M19.1 18h-6.2" />
+</svg>
+
+
+
+                            <select name="language" title="language" onchange="window.location.href = this.selectedOptions[0].value">
+                                
+                                    <option value="http://localhost:1313/en/" >English</option>
+                                
+                                    <option value="http://localhost:1313/" selected>中文</option>
+                                
+                            </select>
+                        </li>
+                    
+                
+
+                
+                    <li id="dark-mode-toggle">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-left" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="8" cy="12" r="2" />
+  <rect x="2" y="6" width="20" height="12" rx="6" />
+</svg>
+
+
+
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-right" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="16" cy="12" r="2" />
+  <rect x="2" y="6" width="20" height="12" rx="6" />
+</svg>
+
+
+
+                        <span>暗色模式</span>
+                    </li>
+                
+            </ol>
+        </li>
+    </ol>
+</aside>
+
+    <aside class="sidebar right-sidebar sticky">
+        
+            
+                
+    <section class="widget archives">
+        <div class="widget-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-hash" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <line x1="5" y1="9" x2="19" y2="9" />
+  <line x1="5" y1="15" x2="19" y2="15" />
+  <line x1="11" y1="4" x2="7" y2="20" />
+  <line x1="17" y1="4" x2="13" y2="20" />
+</svg>
+
+
+
+        </div>
+        <h2 class="widget-title section-title">目录</h2>
+        
+        <div class="widget--toc">
+            <nav id="TableOfContents">
+  <ol>
+    <li><a href="#指导思想">指导思想</a>
+      <ol>
+        <li><a href="#识别垃圾">识别垃圾</a>
+          <ol>
+            <li><a href="#引用计数算法">引用计数算法</a></li>
+            <li><a href="#可达性分析算法">可达性分析算法</a></li>
+            <li><a href="#何为引用">何为引用</a></li>
+          </ol>
+        </li>
+        <li><a href="#回收垃圾">回收垃圾</a>
+          <ol>
+            <li><a href="#分代收集算法">分代收集算法</a></li>
+            <li><a href="#标记清除算法">标记清除算法</a></li>
+            <li><a href="#复制算法">复制算法</a></li>
+            <li><a href="#标记整理算法">标记整理算法</a></li>
+          </ol>
+        </li>
+      </ol>
+    </li>
+    <li><a href="#hotspot的垃圾回收设计">HotSpot的垃圾回收设计</a>
+      <ol>
+        <li><a href="#根节点枚举">根节点枚举</a></li>
+        <li><a href="#安全点">安全点</a></li>
+        <li><a href="#安全区">安全区</a></li>
+      </ol>
+    </li>
+  </ol>
+
+  <ol>
+    <li><a href="#serial搜集器">Serial搜集器</a></li>
+    <li><a href="#serial-old收集器">Serial Old收集器</a></li>
+    <li><a href="#parnew收集器">ParNew收集器</a></li>
+    <li><a href="#parallel-scavenge-收集器">Parallel Scavenge 收集器</a></li>
+    <li><a href="#parallel-old收集器">Parallel Old收集器</a></li>
+    <li><a href="#cmsconcurrent-mark-sweep收集器">CMS(Concurrent Mark Sweep)收集器</a></li>
+  </ol>
+</nav>
+        </div>
+    </section>
+
+            
+        
+    </aside>
+
+
+            <main class="main full-width">
+    <article class="has-image main-article">
+    <header class="article-header">
+        <div class="article-image">
+            <a href="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/">
+                <img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/cover_hu_20f54a801636a79b.jpg"
+                        srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/cover_hu_20f54a801636a79b.jpg 800w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/cover_hu_5c1b39cfabcf2752.jpg 1600w"
+                        width="800" 
+                        height="500" 
+                        loading="lazy"
+                        alt="Featured image of post jvm垃圾回收器前篇" />
+                
+            </a>
+        </div>
+    
+
+    <div class="article-details">
+    
+    <header class="article-category">
+        
+            <a href="/categories/jvm/" >
+                Jvm
+            </a>
+        
+    </header>
+    
+
+    <div class="article-title-wrapper">
+        <h2 class="article-title">
+            <a href="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/">jvm垃圾回收器前篇</a>
+        </h2>
+    
+        
+    </div>
+
+    
+    
+    
+    
+    <footer class="article-time">
+        
+            <div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-calendar-time" width="56" height="56" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <path d="M11.795 21h-6.795a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v4" />
+  <circle cx="18" cy="18" r="4" />
+  <path d="M15 3v4" />
+  <path d="M7 3v4" />
+  <path d="M3 11h16" />
+  <path d="M18 16.496v1.504l1 1" />
+</svg>
+                <time class="article-time--published">2023-12-30</time>
+            </div>
+        
+
+        
+            <div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-clock" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <polyline points="12 7 12 12 15 15" />
+</svg>
+
+
+
+                
+                <time class="article-time--reading">
+                    
+                    46min
+                </time>
+            </div>
+        
+    </footer>
+    
+
+    
+</div>
+
+</header>
+
+    <section class="article-content">
+    
+    
+    <h1 id="学习背景">学习背景
+</h1><p>在正式开始垃圾回收器的知识学习之前，我们要先介绍一下本次学习的主要目标。</p>
+<p>大部分人，包括我自己学习垃圾回收器的主要目标就是因为这个知识点实在是太重要了，而且很少有系统并且全面的介绍，系统并且全面的程度至少要足够应付面试。哈哈，面向面试学习。</p>
+<p>本章节的学习目标主要是介绍各个垃圾回收器的实现思想，以及部分垃圾回收器的实现原理。为了方便各位阅读，这里再介绍一下一些术语</p>
+<ul>
+<li>JVM
+java virtual machine， java虚拟机的缩写</li>
+<li>STW
+Stop the world，指垃圾回收器回收垃圾过程中，暂停整个JVM中用户程序的过程</li>
+</ul>
+<h1 id="垃圾回收器是什么">垃圾回收器是什么
+</h1><p>在回答这个问题之前，我们先回顾一下java语言的特性-内存安全。程序员不需要手动释放内存，内存分配以及回收全部交给垃圾回收器完成。这句话概括了垃圾回收器的职责，但是不够具体。垃圾回收器作为JVM的一个模块，应该是更加具体，有实际的物理指代的实体。当然，从JVM的发展史，以及生态来说，不同的JVM实现有不同的垃圾回收器，甚至在一个JVM实现里有多个垃圾回收器(这种做法也是比较主流的JVM的垃圾回收器实现做法)。不同的垃圾回收器针对被回收对象的特点选择合适的算法，以及内存分配方式管理内存，帮助我们高效的使用JVM。在正式开始垃圾回收器的介绍之前，我先介绍一下比较重要的几个JVM实现，以及历史上的JVM实现，因为我们要学习的垃圾回收器，其理论实现也是由这些JVM完成的。</p>
+<ul>
+<li>Sun Classic
+伴随着JDK1.0发布的第一款商用虚拟机，目前已经退出舞台。</li>
+<li>HotSpot VM
+虚拟机领域的王者，可以说是目前使用最广泛的jvm。虽然这款JVM是目前JAVA服务器领域使用最广泛的实现，但是它一开始并不是为java语言设计的，甚至不是SUN公司设计的。HotSpot一开始由一家小公司&quot;Longview Technologies&quot;设计，Sun公司注意到这款JVM的很多设计非常可圈可点，于是收购了这家公司。当然后来SUN又被Oracle收购了，现在HotSpot的实现由Oracel负责。</li>
+<li>JRockit
+由BEA System实现，在JVM内部大量使用即时编译技术，曾经号称&quot;世界上运行最快的JVM&quot;。后来也被Oracle收购了(怎么哪里都有你，oracle!)，现在已经不再发展。</li>
+<li>IBM J9
+IBM主力发展的JVM，曾经和HotSpot，JRockit并称JVM三雄。后来被IBM捐给Eclipse基金会，实际上Eclipse也是IBM成立的，不过是单独运作。</li>
+</ul>
+<p>在后面的垃圾回收器的理论学习里，我们将主要选择HotSpot的实现来讨论。</p>
+<h1 id="jvm内存区域">JVM内存区域
+</h1><p>在讨论垃圾回收器之前，还需要了解JVM的内存布局，了解内存布局能帮助我们更好的理解垃圾回收器的工作机制，不仅仅是垃圾回收器的工作机制，后续的编译器的知识也需要提前了解jvm内存布局。根据《java虚拟机规范》jvm的内存布局分为下面几个部分。</p>
+<p>![jvm内存布局](E:\blog\my-blog\2023-12-30 jvm垃圾回收器理论/jvm垃圾回收器上篇.assets/jvm内存布局.jpg)</p>
+<p>看到这一坨不知道是做什么的区域划分是不是一脸懵逼，不要急，等我慢慢解释。</p>
+<ol>
+<li>程序计数器
+在jvm运行过程中，往往需要从一个线程切换到另外一个线程。但是实际上，物理意义上一个cpu核心一个时刻只能有一个线程在运行。那么jvm为了实现看起来在&quot;一个时刻&quot;，比如说&quot;1秒钟&quot;内运行多个线程这种效果。本质就是通过在多个线程之间切换跳转完成的。程序计数器是一块线程私有的区域，他的作用就是用来记录当前线程执行的指令位置。(这里的知识如果了解操作系统关于CPU调度时间片的理论的话，理解起来会更加形象)</li>
+<li>虚拟机栈
+jvm的运行是基于字节码指令来完成的，关于字节码指令运行的细节以及指令之间切换的过程很复杂，在后续关于编译器的内容里我们再细说。这里大家有个大概的概念即可，所有指令按照后进先出的方式排队(也被称为压栈)，虚拟机栈就是来记录每条指令的，每当一条指令被执行完毕，这条指令就从栈中移除，被称为弹栈。这里只是一个大概的描述，实际上虚拟机栈里除了存储指令还存储了指令需要使用的变量(局部变量表)，方法的返回地址，方法出口等信息。简单的理解就是为了执行这条指令所必须得参数以及返回值地址等信息。</li>
+<li>native栈
+也被称为本地方法栈，结构和虚拟机栈类似。区别是虚拟机栈是为了执行java方法的，但是本地方法栈则是为了执行非java方法的。比如USafe工具，里面的方法大部分都是native的，用native标记。
+<img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/image-20240102180943864.jpg"
+	width="1536"
+	height="566"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/image-20240102180943864_hu_d706cb4e9ed0eff2.jpg 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/image-20240102180943864_hu_158d94e6d1b3be35.jpg 1024w"
+	loading="lazy"
+	
+		alt="image-20240102180943864"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="271"
+		data-flex-basis="651px"
+	
+></li>
+<li>堆
+jvm中内存最大的区域，也是存放数组和对象的位置。也是我们今天要讲的垃圾回收器的主要工作区域。在很多描述垃圾回收的理论里常出现&quot;新生代&quot;，&ldquo;老年代&quot;的概念。其实所谓新生代，老年代都是指的堆中的内存，只不过按照不同的划分方式划分。堆中的内存可以认为几乎是所有线程共享的，但不是全部。因为在实际的内存分配时，为了加速线程访问速度，每个线程在堆上还有一小块私有区域，叫做TLAB(Thread Local Allocation Buffer)。试想一下，假设没有这个TLAB区域，每个线程随机访问内存，那么很容易就产生线程竞争，拖慢线程访问速度。</li>
+<li>方法区
+方法区是存放被编译后的类信息，常量，静态变量等信息。方法区本质也是堆的一部分，但是因为它的重要性还是把它与堆区分开来。说到方法区，还要提到一个概念&quot;永久代&rdquo;。以HotSpot为例，在JDK7之前，HotSpot是使用永久代来实现方法区。具体做法是让垃圾回收器管理像管理堆一样管理这部分内存，这样就省去了专门为方法区编写内存管理代码的工作。但是同时期的一些JVM，比如J9，JRocikt是不存在永久代的概念的。这里就能看出来《java虚拟机规范》只是一个规范，具体的实现则掌握在开发团队手里。长久来看这种做法并不是一个好主意，因为这会导致内存溢出的风险，所以HotSpot团队在JDK7版本彻底放弃了永久代的概念，将原本永久代拆分成方法区和常量池。</li>
+<li>运行时常量池
+运行时常量池是方法区的一部分，用来存放类被编译后的常量，但是这个常量池也可以在运行时动态增加，比如String的intern方法就可以添加新的常量</li>
+<li>直接内存
+这一块内存不属于JVM运行时内存的部分，但是也可能被经常使用，比如NIO库中的DirectByteBuffer就是操作的直接内存，大名鼎鼎的Netty的ByteBuf也是使用的直接内存。</li>
+</ol>
+<p>好吧前面我们叨逼叨了这么久，总算是快进入到正题了，但最后容许我再叨逼叨一点。实际上最好再讲讲对象创建以及对象内存布局的内容，但是如果继续铺垫，就显得&quot;前奏&quot;太冗长，所以这部分内容等后面讲编译器相关内容的时候我再拿出来详细介绍。</p>
+<h1 id="垃圾回收理论">垃圾回收理论
+</h1><h2 id="指导思想">指导思想
+</h2><p>设想一下，要回收一个对象，要怎么回收。大致上我们可以分为两步。</p>
+<ol>
+<li>确定那些对象需要回收-识别垃圾</li>
+<li>将需要回收的对象所在的内存置空-回收垃圾
+我们分别以这两个步骤来介绍垃圾回收器的设计思想。</li>
+</ol>
+<h3 id="识别垃圾">识别垃圾
+</h3><h4 id="引用计数算法">引用计数算法
+</h4><p>假如我有一个额外的区域，里面记录了每个对象被引用的次数。比如objectA = 2;表示有两个对象引用了objectA对象。
+每当有其他对象引用obecjtA，比如objectB.a = objectA时就将引用次数+1，当引用失效时引用-1(包括释放引用objectB.a=null以及持有引用的objectB被销毁)。当objectA的被引用次数归零时，说明没有其他对象再objectA，这时就可以销毁objectA。
+这时一种很朴素的思路，也是很多软件采取的垃圾回收方式，比如FlashPlayer，Python，Redis里都有使用这个算法。但是java里主流的JVM都没有采用这种算法，因为它很难处理循环引用的情况，需要编写额外的代码。
+一个简单的循环引用的例子</p>
+<h4 id="可达性分析算法">可达性分析算法
+</h4><p>主流的现代jvm都采用的可达性分析算法来判断一个对象是否可以被回收。可达性分析算法要求从一些列被称为&quot;GC root&quot;的对象出发，遍历这些对象引用的对象，我们称为子Field。并不断地再找到子Field引用的对象。通过这种不断向更深处找到被引用对象的方式，我们可以得到一条&quot;引用链&quot;(reference chain)，处于引用链上的对象就是存活的。处于引用链之外的对象就是可以被回收的。
+![GC ROOT](index.assets/GC ROOT.jpg)
+在实际的算法实现中，被用作GC ROOT的对象一般是以下几种</p>
+<ol>
+<li>虚拟机栈中的对象，比如局部变量，临时变量</li>
+<li>方法区静态属性引用的对象</li>
+<li>方法区常量引用的对象</li>
+<li>native方法引用的对象</li>
+<li>其他，这里可以概括为虚拟机内部持有的对象，比如类加载器持有的对象，JMX持有的对象，甚至Synchronized持有的对象。</li>
+</ol>
+<h4 id="何为引用">何为引用
+</h4><p>通过前面的介绍，我们发现一个很重要的概念，引用。引用描述了两个对象之间的持有关，它实际的定义是在JDK1.2后才定义的。我们把引用大致分为4类。</p>
+<ol>
+<li>
+<p>强引用 Strong Reference</p>
+<p>只要强引用还在，对象就不能被回收。例如Object o = new Object();</p>
+</li>
+<li>
+<p>软引用 Soft Reference</p>
+<p>软引用是描述一些还有用但并非必须的对象，当JVM要发生内存溢出时，会把软引用关联的对象列入回收范围进行二次回收。如果还没有足够内存则抛出内存溢出异常。可以用SoftReference来描述软引用。</p>
+</li>
+<li>
+<p>弱引用 Weak Reference</p>
+<p>弱引用关联的对象只能生存到下一次内存回收之前。当垃圾收集器工作时不论内存是否足够，都会回收掉弱引用对象。用WeakReference类实现软引用</p>
+</li>
+<li>
+<p>虚引用 Phantom Reference</p>
+<p>虚引用也被称为幽灵引用。一个对象是否有虚引用的存在，完全不影响其生存时间，因为无法通过虚引用来取得一个对象。使用PhantomReference来实现虚引用。</p>
+</li>
+</ol>
+<p>实际上引用的用法远不止这里说的确定两个对象之间的关系，比如Netty里使用WeakReference来检测内存泄漏。但是这不是重点，我们不展开介绍。</p>
+<h3 id="回收垃圾">回收垃圾
+</h3><h4 id="分代收集算法">分代收集算法
+</h4><p>在介绍回收内存的方式之前我们先介绍分代收集算法，这也是现代虚拟机主要采用的收集算法。简单的说，根据对象的年龄对对象进行划分，年龄比较短的对象被存放在新生代（young 区域），年龄比较大的对象存放到老年代（old 区域）。一般计算对象年龄的方式是根据对象经过的垃圾回收次数，比如每次经过垃圾回收就将对象年龄+1岁。在HotSpot中，默认是对象经过15次垃圾回收还存活就会被转移到老年代，当然这个年龄是可以设置的。分带算法对垃圾回收算法影响很大，在接下来的介绍里，你将会看到不同的垃圾回收算法在不同算法的影响。</p>
+<h4 id="标记清除算法">标记清除算法
+</h4><p>标记清除算法的思路很朴素，算法分为标记和清除阶段。首先标记出所有需要回收的对象，在标记完成后统一回收被标记的对象。标记方式和可达性分析一致。但这么做容易产生大量内存不连续的碎片，导致后续虚拟机分配内存时没有足够的连续空间不得不触发下一次GC。
+<img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E6%A0%87%E8%AE%B0%E6%B8%85%E9%99%A4%E7%AE%97%E6%B3%95.jpg"
+	width="1278"
+	height="481"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E6%A0%87%E8%AE%B0%E6%B8%85%E9%99%A4%E7%AE%97%E6%B3%95_hu_b38eca1d343bd573.jpg 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E6%A0%87%E8%AE%B0%E6%B8%85%E9%99%A4%E7%AE%97%E6%B3%95_hu_5f122f3b7303451c.jpg 1024w"
+	loading="lazy"
+	
+		alt="标记清除算法"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="265"
+		data-flex-basis="637px"
+	
+></p>
+<h4 id="复制算法">复制算法
+</h4><p>复制算法是标记清除算法的改进版本，它将内存划分为大小相等的两块每次只使用其中一块。当这一块内存用完了，还存活的对象就被复制到另一块上面，然后再把以使用过的内存空间清理掉。这样每次都只对一半的区域进行回收，也不用考虑分配内存时内存不连续的问题，每次回收完毕都可以得到完整连续的内存区域。但是运行内存缩小为了原来的一半，代价太高。但是有办法改进。</p>
+<p>现在的商业虚拟机都是采用这种算法，IBM研究过新生代中的对象99%都是朝生夕死，所以并不需要按照1：1的比例来划分空间，而是把内存划分为一块较大的Eden区域和两块较小的Survivor区域，分别称为Eden区，From Survivor区，To Survivor区。每次使用Eden和一块From Survivor区域。回收时将Eden和From Survivor区域中还存活的对象复制到另一块To Survivor中，然后清理掉Eden和From Survivor区域。
+HotSpot虚拟机的默认Eden和From Survivor，To Survivor区大小比例8：1：1，每次新生代可用内存占用整个新生代的90%。这里面有个问题，如果回收后需要转移到To Survivor区域的对象超过了To Survivor的容量，即当To Survivor不够时，需要老年代进行内存担保，将一些对象晋升老年代。</p>
+<p>这里我画图并没有按照8:1:1的比例画，因为太难了，大家主要是理解复制算法的思想即可。
+<img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E5%A4%8D%E5%88%B6%E7%AE%97%E6%B3%95.jpg"
+	width="1414"
+	height="1337"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E5%A4%8D%E5%88%B6%E7%AE%97%E6%B3%95_hu_172a6fdb6b2bd383.jpg 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E5%A4%8D%E5%88%B6%E7%AE%97%E6%B3%95_hu_eb8ec374a482f76c.jpg 1024w"
+	loading="lazy"
+	
+		alt="复制算法"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="105"
+		data-flex-basis="253px"
+	
+></p>
+<h4 id="标记整理算法">标记整理算法
+</h4><p>从对复制算法的介绍来看，复制算法有两个不足。</p>
+<ol>
+<li>当垃圾回收后存在大量的存活对象时，会花费很多时间做内存拷贝。</li>
+<li>更重要的是，为了避免只使用可用内存的50%导致浪费内存，必须能够有额外的空间保证回收后当存活对象的内存大于互备空间时进行空间分配担保。如果没有额外的空间担保，那么很可能本次垃圾回收会失败。</li>
+</ol>
+<p>很明显老年代存活的对象即是存活周期很长的对象，又没有额外的空间来给老年代做担保，所以我们还需要另外的算法来回收老年代。
+老年代一般采用标记整理算法。这个算法的思路也比较朴素，首先标记出所有存活的对象，然后将存活的对象往一端移动，最后直接回收掉边界以外的内存。</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E6%A0%87%E8%AE%B0%E6%95%B4%E7%90%86%E7%AE%97%E6%B3%95.jpg"
+	width="1780"
+	height="617"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E6%A0%87%E8%AE%B0%E6%95%B4%E7%90%86%E7%AE%97%E6%B3%95_hu_7cf1b0e06d2dcfea.jpg 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/%E6%A0%87%E8%AE%B0%E6%95%B4%E7%90%86%E7%AE%97%E6%B3%95_hu_30d2b5e81cc0e5e8.jpg 1024w"
+	loading="lazy"
+	
+		alt="标记整理算法"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="288"
+		data-flex-basis="692px"
+	
+></p>
+<h2 id="hotspot的垃圾回收设计">HotSpot的垃圾回收设计
+</h2><p>正如我一开始说的，《java虚拟机规范》只是一个规范，并不强制。jvm团队可以根据自己的需要设计虚拟机。接下来我们从HotSpot这款垃圾收集器来了解了在上面的垃圾回收指导思想下，一些实际的设计点。当然这里的设计点可能需要实际的结合具体的垃圾回收器才能彻底的理解，但是这里我还是先做一个介绍。</p>
+<h3 id="根节点枚举">根节点枚举
+</h3><p>从可达性分析算法来看，我们识别垃圾的步骤就是找到所有从GC Roots出发可达的对象，但是找到哪些对象是GC Roots却并非易事。如果只是逐个检查方法区和常量池等内存区域，把所有对象都遍历一遍，那么这个效果肯定低效的令人发指，因为枚举GC Roots这一步是伴随着STW (STOP THE WORLD，意思是暂停所有除垃圾回收器以外的线程，这么做是为了保证识别出的GC Roots准确，不会被用户线程改变引用)。
+HotSpot采用一种被称为OopMap的结构来加速枚举GC Roots过程。当一个对象被加载完毕后，对象内什么位置是什么数据就会被记录下来，还会记录下栈和寄存器里的内存引用位置，这么做就避免了扫描方法区所有对象的过程。</p>
+<h3 id="安全点">安全点
+</h3><p>有了Oop Map，我们就能快速完成GC Roots枚举，但是如果每次内存的引用变更都生成一次Oop Map，那么效率还是很低。。所以JVM要求生成Oop Map的位置只能在安全点生成，安全点生成的位置要求满足&quot;能够让程序长时间执行的特征&quot;。我们对生成安全点的期望是既不会间隔太长导致垃圾回收器等待，也不会间隔太短会导致运行时的回收开销太大。一般的安全点在方法调用，循环，异常跳转等位置。</p>
+<h3 id="安全区">安全区
+</h3><p>安全区的定义与安全点类似，安全区是指引用关系在一段代码内引用关系没发生改变。可以吧安全区看做是安全点的拉伸。</p>
+<h1 id="垃圾回收器介绍">垃圾回收器介绍
+</h1><p>有了前面的理论铺垫，接下来我们正式开始学习实际垃圾回收器。</p>
+<h2 id="serial搜集器">Serial搜集器
+</h2><p>jdk最老的收集器，单线程运行，运行期间会暂停JVM中所有工作线程(STW)。虽然听起来让人难以接受，但仍然是Client模式下的新生代默认收集器，因为它的简单高效，开销极小。</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/serial%E6%94%B6%E9%9B%86%E5%99%A8-1704377701761.jpg"
+	width="1703"
+	height="719"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/serial%E6%94%B6%E9%9B%86%E5%99%A8-1704377701761_hu_bb2e0dc95776e02e.jpg 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/serial%E6%94%B6%E9%9B%86%E5%99%A8-1704377701761_hu_c78fd45915c7f466.jpg 1024w"
+	loading="lazy"
+	
+		alt="serial收集器"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="236"
+		data-flex-basis="568px"
+	
+></p>
+<h2 id="serial-old收集器">Serial Old收集器
+</h2><p>它是Serial收集器的老年代版本，同样是单线程收集器。使用标记整理算法。这个收集器的主要作用是在Client模式下给虚拟机使用。在Server模式下还可以配合Parallel Scavenge使用。还有就是作为CMS收集器的后备方案，当CMS收集器发生Concurrent Mode Failure时使用它来回收老年代。这个知识点我们在后续CMS收集器里详细介绍。
+额外提一下，Parallel Scavenge其实有一个老年代版本叫PS MarkSweep，但是PS MarkSweep的实现和Serial Old基本一样，所以这里只介绍Serial Old收集器。</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/serial%E6%94%B6%E9%9B%86%E5%99%A8-1704377692431.jpg"
+	width="1703"
+	height="719"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/serial%E6%94%B6%E9%9B%86%E5%99%A8-1704377692431_hu_5d4c69801c6d39c5.jpg 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/serial%E6%94%B6%E9%9B%86%E5%99%A8-1704377692431_hu_d398ffd534aaa870.jpg 1024w"
+	loading="lazy"
+	
+		alt="serial收集器"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="236"
+		data-flex-basis="568px"
+	
+></p>
+<h2 id="parnew收集器">ParNew收集器
+</h2><p>Serial收集器的多线程版本。虽然并没有什么创新之处，但它仍是JDK1.7 Server模式下新生代的首选收集器。除了性能之外很重要的原因就是他和Serial能配合CMS收集器工作。
+注意，在单核环境下ParNew并不比Serial强。</p>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/ParNew%E6%94%B6%E9%9B%86%E5%99%A8.jpg"
+	width="1017"
+	height="719"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/ParNew%E6%94%B6%E9%9B%86%E5%99%A8_hu_db0371efb14a53e7.jpg 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/ParNew%E6%94%B6%E9%9B%86%E5%99%A8_hu_e473201917c5dd14.jpg 1024w"
+	loading="lazy"
+	
+		alt="ParNew收集器"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="141"
+		data-flex-basis="339px"
+	
+></p>
+<h2 id="parallel-scavenge-收集器">Parallel Scavenge 收集器
+</h2><p>使用多线程的新生代收集器，也被称为吞吐量优先收集器，它更关注达到可控的吞吐量(Throughput)，一般的垃圾收集器的设计思想则是想要达到一个比较短的停顿时间，比如CMS。吞吐量 = 运行用户代码时间/(运行用户代码时间+垃圾收集器时间)，停顿时间越短越适合需要与用户交互的程序。他有两个比较重要的参数</p>
+<ul>
+<li>
+<p>-XX:MaxGCPauseMillis 设置最大垃圾收集停顿时间，单位毫秒。收集器将尽可能保证内存回收花费的时间小于该值。这个值不是设置的越小越好。因为GC时间缩短其实是靠减小新生代空间来实现的，但是减小新生代空间同时会导致以前1次能容纳并且GC的对象现在需要2次GC才能容纳</p>
+</li>
+<li>
+<p>-XX:GCTimeRatio 直接设置吞吐量大小，其实是吞吐量的倒数，即垃圾收集器占总时间的时间比率取值(0-100)。如果设置为19，则运行垃圾回收器的时间只能占整体时间的5%，即1/(1+19)。默认值99，即要求垃圾回收器的工作时间只能占用整体时间的1%。</p>
+</li>
+</ul>
+<p>Parallel Scavenge收集器还有一个可选参数-XX:+useAdaptiveSizePolicy，这个开关打开后就不需要指定新生代的小-Xmn,Eden和Survivor的比例（-XX:SurvivoRatio）,晋升老年代对象年龄-XX:PretenureSizeThreshold等参数。虚拟机会根据系统运行状况进行性能监控信息，自动调整这些参数以提供最适合的停顿时间或者最大吞吐量，这种调节方式称为GC自适应调节策略。</p>
+<h2 id="parallel-old收集器">Parallel Old收集器
+</h2><p>Parallel Old是ParNew收集器的老年代版本，使用多线程+标记整理算法。主要用来和Parallel Scavenge配合使用达到一个可控的吞吐量。在注重吞吐量和资源敏感的场合适用。这个收集器在JDK1.6才正式提供，所以在JDK1.6之前只能使用Parallel Scavenge + Serial Old的搭配回收内存，但是在一些老年代内存空间比较大的场景下，因为Serial Old收集器本身的性能原因，导致这个组合的的吞吐性能并不高，甚至比不过ParNew+CMS的组合。这个现象直到Parallel Old收集器诞生才改善。</p>
+<h2 id="cmsconcurrent-mark-sweep收集器">CMS(Concurrent Mark Sweep)收集器
+</h2><p>CMS是作用于老年代的收集器，基于标记-清除算法实现。它的设计目标是为了尽可能的降低停顿时间，在一些常见的网络服务器上，很适合使用它。开启方法-XX:+UseConcMarkSweepGC，它回收过程包含4个步骤。</p>
+<ol>
+<li>
+<p>初始标记（CMS initial mark）</p>
+</li>
+<li>
+<p>并发标记（CMS concurrent mark）</p>
+</li>
+<li>
+<p>重新标记（CMS remark）</p>
+</li>
+<li>
+<p>并发清楚（CMS consurrent sweep）</p>
+</li>
+</ol>
+<p>其中初始标记和重新标记任然要暂停所有线程，但是时间很短。初始标记仅仅记录下GC Roots直接关联到的对象，速度很快。并发标记就是GC Roots Tracing的过程，这个过程用户线程和垃圾回收线程并发运行。而重新并发标记则是为了修正并发标记期间因为用户线程继续运作导致的标记产生变动的标记记录，这个阶段停顿的时间一般会比初始标记阶段稍长，但远比并发标记的时间短。整个过程耗时最长的并发标记和并发清楚过程都是收集器和用户线程一起运行的。（并发是指多个线程交替执行）</p>
+<p>CMS收集器是JVM第一次尝试减少STW的时间并且取得了比较好的效果，一些文档甚至把CMS收集器称为&quot;并发低停顿收集器&quot;。但CMS收集器并不是完美的，它有3个明显的缺点：</p>
+<ol>
+<li>
+<p>对CPU资源敏感，CMS默认启动的回收线程是(CPU数量+3)/4，也就是说当CPU在4个以上时，并发回收时垃圾收集线程不少于25%的CPU资源。但当Cpu不足4个时,CMS对用户的影响就可能变大，如果本来CPU负载就比较大，还要分出一部分算力区执行收集器线程，那么就可能导致用户程序的执行速度骤降。为了应付这种情况，JVM提供了一种称为”增量式并发收集器（Icrremental Concurrent Mark Sweep/i-CMS）”的变种，它的不同之处是在并发标记，并发清除时让GC线程，用户线程交替运行，拉长垃圾回收的时间，这样对用户的影响就会少一些(用户感觉变的不那么慢，但是不那么慢的时间变得更长)。但实际上，增量CMS收集器效果很一般。在JDK9里增量并发收集器已经被废弃了。</p>
+</li>
+<li>
+<p>CMS收集器无法处理浮动垃圾（Floating Garbage），可能会出现Concurrent Mode Failure失败而导致一次完全STW的Full GC的产生。当CMS并发清理阶段用户线程还在产产生垃圾，这部分垃圾出现在标记过程之后，无法被CMS处理，只能等到下一次GC时再清理。这一部分垃圾被称为浮动垃圾。也是由于垃圾收集器工作时用户线程还在运行，那么需要足够的内存空间给用户线程使用，因此垃圾收集器不能像其他收集器那样等到老年代快满了才进行垃圾回收，因为还需要一部分空间提供并发收集器运行。在JDK1.5下，当老年代使用了68% CMS就会被激活，这是一个偏保守的设置，如果老年代增长不是特别快可以适当调高参数-XX：CMSInitiatingOccupancyFraction的值来提高出发百分比，以便降低内存回收次数获得更好的性能。在JDK1.6时这个值提升至92%。要是CMS运行期间预留的内存无法满足CMS的运行需要时就会触发Concurrent Mode Filure ,这是JVM就启动后背预案，临时启用Serial Old收集器来进行老年代垃圾收集，这样停顿时间就很长，所以说参数-XX:CMSInitiaingOccupancyFraction设置太高容易导致大量的Concurrent Mode Failure，性能反而更低。</p>
+</li>
+<li>
+<p>CMS收集器还有个缺点，因为它是基于标记清除算法实现的收集器，导致在收集结束时会产生大量的空间碎片，碎片过多导致大对象分配无法找到连续的空间不得不进行一次Full GC。为了解决这个问题,CMS提供了一个参数-XX:+UseCMSCompactAtFullCollection开关（默认开启），在CMS收集器快要进行FullGC时开启内存碎片整理，但整理过程需要移动存活对象无法并发，停顿时间不得不变长。为此，CMS还提供了另一个参数-XX:CMSFullGCsBeforeCompaction,这个参数是设置执行多少次不压缩的FullGC后跟着来一次带压缩（碎片整理）的，默认值为0，表示每次Full GC时都进行碎片整理。但是这两个参数在JDK9的时候也废弃了。</p>
+</li>
+</ol>
+<p><img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/CMS%E6%94%B6%E9%9B%86%E5%99%A8-1704378600795.jpg"
+	width="2028"
+	height="719"
+	srcset="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/CMS%E6%94%B6%E9%9B%86%E5%99%A8-1704378600795_hu_38af4217ea016d28.jpg 480w, /p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%89%8D%E7%AF%87/index.assets/CMS%E6%94%B6%E9%9B%86%E5%99%A8-1704378600795_hu_80a221cca0e8ccc4.jpg 1024w"
+	loading="lazy"
+	
+		alt="CMS收集器"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="282"
+		data-flex-basis="676px"
+	
+></p>
+<hr>
+<p>华丽分割线</p>
+<hr>
+<p>到目前为止其实我们还是主要关注在垃圾回收器的理论，并没有实际的介绍垃圾回收器的回收细节。以目前的环境来看，只知道这些去面试肯定是不够的，而且还有最关键的垃圾回收器G1，ZGC，日志等信息我们都没有做讲解。大家放心，这些内容后续肯定会讲，不过文章如果太长反而会影响大家的阅读兴趣，所以垃圾回收器的内容我打算拆成上下两篇。在下篇文章里我会详细介绍G1和ZGC，以及GC日志的知识。大家敬请期待。</p>
+
+</section>
+
+
+    <footer class="article-footer">
+    
+    <section class="article-tags">
+        
+            <a href="/tags/jvm/">Jvm</a>
+        
+            <a href="/tags/%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8/">垃圾回收器</a>
+        
+    </section>
+
+
+    
+    <section class="article-copyright">
+        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-copyright" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <path d="M14.5 9a3.5 4 0 1 0 0 6" />
+</svg>
+
+
+
+        <span>Licensed under CC BY-NC-SA 4.0</span>
+    </section>
+    </footer>
+
+
+    
+</article>
+
+    
+
+    
+
+<aside class="related-content--wrapper">
+    <h2 class="section-title">相关文章</h2>
+    <div class="related-content">
+        <div class="flex article-list--tile">
+            
+                
+<article class="has-image">
+    <a href="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/">
+        
+        
+            <div class="article-image">
+                <img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/cover.5cfcd04baec36fca4e14911b4f67c751_hu_77cdd67923b433a1.jpg" 
+                        width="250" 
+                        height="150" 
+                        loading="lazy"
+                        alt="Featured image of post jvm垃圾回收器后篇"
+                        
+                        data-hash="md5-XPzQS67Db8pOFJEbT2fHUQ==">
+                
+            </div>
+        
+
+        <div class="article-details">
+            <h2 class="article-title">jvm垃圾回收器后篇</h2>
+        </div>
+    </a>
+</article>
+
+            
+                
+<article class="has-image">
+    <a href="/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/">
+        
+        
+            <div class="article-image">
+                <img src="/p/jvm%E7%B1%BB%E5%8A%A0%E8%BD%BD%E5%99%A8/index.assets/cover.530be746e65198b8ef399109580687aa_hu_7f40994807886298.jpg" 
+                        width="250" 
+                        height="150" 
+                        loading="lazy"
+                        alt="Featured image of post jvm类加载器"
+                        
+                        data-hash="md5-UwvnRuZRmLjvOZEJWAaHqg==">
+                
+            </div>
+        
+
+        <div class="article-details">
+            <h2 class="article-title">jvm类加载器</h2>
+        </div>
+    </a>
+</article>
+
+            
+                
+<article class="has-image">
+    <a href="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%AF%B9%E8%B1%A1%E5%88%86%E9%85%8D%E8%A7%84%E5%88%99/">
+        
+        
+            <div class="article-image">
+                <img src="/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%AF%B9%E8%B1%A1%E5%88%86%E9%85%8D%E8%A7%84%E5%88%99/index.assets/cover.386e079aa54a6fb6d29a54fd4b0be56f_hu_244f1489af6b6215.jpg" 
+                        width="250" 
+                        height="150" 
+                        loading="lazy"
+                        alt="Featured image of post jvm垃圾回收器对象分配规则"
+                        
+                        data-hash="md5-OG4HmqVKb7bSmlT9Swvlbw==">
+                
+            </div>
+        
+
+        <div class="article-details">
+            <h2 class="article-title">jvm垃圾回收器对象分配规则</h2>
+        </div>
+    </a>
+</article>
+
+            
+        </div>
+    </div>
+</aside>
+
+     
+    
+        
+    <div class="disqus-container">
+    <div id="disqus_thread"></div>
+<script>
+    window.disqus_config = function () {
+    
+    
+    
+    };
+    (function() {
+        if (["localhost", "127.0.0.1"].indexOf(window.location.hostname) != -1) {
+            document.getElementById('disqus_thread').innerHTML = 'Disqus comments not available by default when the website is previewed locally.';
+            return;
+        }
+        var d = document, s = d.createElement('script'); s.async = true;
+        s.src = '//' + "hugo-theme-stack" + '.disqus.com/embed.js';
+        s.setAttribute('data-timestamp', +new Date());
+        (d.head || d.body).appendChild(s);
+    })();
+</script>
+<noscript>Please enable JavaScript to view the <a href="https://disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+<a href="https://disqus.com" class="dsq-brlink">comments powered by <span class="logo-disqus">Disqus</span></a>
+</div>
+
+<style>
+    .disqus-container {
+        background-color: var(--card-background);
+        border-radius: var(--card-border-radius);
+        box-shadow: var(--shadow-l1);
+        padding: var(--card-padding);
+    }
+</style>
+
+<script>
+    window.addEventListener('onColorSchemeChange', (e) => {
+        if (typeof DISQUS == 'object') {
+            DISQUS.reset({
+                reload: true
+            });
+        }
+    })
+</script>
+
+    
+
+    <footer class="site-footer">
+    <section class="copyright">
+        &copy; 
+        
+        2025 javashitu
+    </section>
+    
+    <section class="powerby">
+        使用 <a href="https://gohugo.io/" target="_blank" rel="noopener">Hugo</a> 构建 <br />
+        主题 <b><a href="https://github.com/CaiJimmy/hugo-theme-stack" target="_blank" rel="noopener" data-version="3.30.0">Stack</a></b> 由 <a href="https://jimmycai.com" target="_blank" rel="noopener">Jimmy</a> 设计
+    </section>
+</footer>
+
+
+    
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+    
+    <div class="pswp__bg"></div>
+
+    
+    <div class="pswp__scroll-wrap">
+
+        
+        <div class="pswp__container">
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+        </div>
+
+        
+        <div class="pswp__ui pswp__ui--hidden">
+
+            <div class="pswp__top-bar">
+
+                
+
+                <div class="pswp__counter"></div>
+
+                <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+
+                <button class="pswp__button pswp__button--share" title="Share"></button>
+
+                <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+
+                <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+
+                
+                
+                <div class="pswp__preloader">
+                    <div class="pswp__preloader__icn">
+                        <div class="pswp__preloader__cut">
+                            <div class="pswp__preloader__donut"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+                <div class="pswp__share-tooltip"></div>
+            </div>
+
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+            </button>
+
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+            </button>
+
+            <div class="pswp__caption">
+                <div class="pswp__caption__center"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div><script 
+                src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"integrity="sha256-ePwmChbbvXbsO02lbM3HoHbSHTHFAeChekF1xKJdleo="crossorigin="anonymous"
+                defer
+                >
+            </script><script 
+                src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"integrity="sha256-UKkzOn/w1mBxRmLLGrSeyB4e1xbrp4xylgAWb3M42pU="crossorigin="anonymous"
+                defer
+                >
+            </script><link 
+                rel="stylesheet" 
+                href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"crossorigin="anonymous"
+            ><link 
+                rel="stylesheet" 
+                href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"crossorigin="anonymous"
+            >
+
+            </main>
+        </div>
+        <script 
+                src="https://cdn.jsdelivr.net/npm/node-vibrant@3.1.6/dist/vibrant.min.js"integrity="sha256-awcR2jno4kI5X0zL8ex0vi2z&#43;KMkF24hUW8WePSA9HM="crossorigin="anonymous"
+                
+                >
+            </script><script type="text/javascript" src="/ts/main.3a1a8966cafbfc78457f276ea131a0bdd7155858067cf76100572a15ddfcb82a.js" defer></script>
+<script>
+    (function () {
+        const customFont = document.createElement('link');
+        customFont.href = "https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap";
+
+        customFont.type = "text/css";
+        customFont.rel = "stylesheet";
+
+        document.head.appendChild(customFont);
+    }());
+</script>
+
+    </body>
+</html>
