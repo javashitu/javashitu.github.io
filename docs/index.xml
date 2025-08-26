@@ -1,11 +1,12 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
     <channel>
-        <title>javashitu的博客</title>
+        <title>javashitu</title>
         <link>http://localhost:1313/</link>
-        <description>Recent content on javashitu的博客</description>
+        <description>Recent content on javashitu</description>
         <generator>Hugo -- gohugo.io</generator>
         <language>zh-cn</language>
+        <copyright>javashitu</copyright>
         <lastBuildDate>Thu, 28 Nov 2024 00:00:00 +0000</lastBuildDate><atom:link href="http://localhost:1313/index.xml" rel="self" type="application/rss+xml" /><item>
         <title>kafka数据在服务端是如何写入的</title>
         <link>http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/</link>
@@ -2510,10 +2511,19 @@ HotSpot采用一种被称为OopMap的结构来加速枚举GC Roots过程。当�
         <item>
         <title>归档</title>
         <link>http://localhost:1313/archives/</link>
-        <pubDate>Sun, 06 Mar 2022 00:00:00 +0000</pubDate>
+        <pubDate>Tue, 28 May 2019 00:00:00 +0000</pubDate>
         
         <guid>http://localhost:1313/archives/</guid>
         <description></description>
+        </item>
+        <item>
+        <title>关于</title>
+        <link>http://localhost:1313/%E5%85%B3%E4%BA%8E/</link>
+        <pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+        
+        <guid>http://localhost:1313/%E5%85%B3%E4%BA%8E/</guid>
+        <description>&lt;p&gt;前美团，支付宝程序员.&lt;/p&gt;
+</description>
         </item>
         <item>
         <title>搜索</title>

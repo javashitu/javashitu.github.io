@@ -9,13 +9,11 @@
 <link rel="stylesheet" href="/scss/style.min.946cca6c6259ef94ac55abfae7c7bf3291ea3ed5eea17ef77500b257217c6710.css"><meta property='og:title' content="jvm垃圾回收器后篇">
 <meta property='og:description' content="学习背景 经过了垃圾回收器的理论学习，我们基本掌握了垃圾回收器的一些基本思想。但是想达到能随便应对面试的情况还不够，我们还需要了解一些具体的垃圾回收器的执行过程，以此来让面试官感觉耳目一新。如果没看过垃圾回收器理论的朋友可以看一下我的上一篇文章。\n垃圾回收器介绍 G1(Garbage First)垃圾回收器 G1垃圾收集器在JDK7被开发出来，JDK8功能基本完全实现。并且成功替换掉了Parallel Scavenge成为了服务端模式下默认的垃圾收集器。对比起另外一个垃圾回收器CMS，G1不仅能提供能提供规整的内存，而且能够实现可预测的停顿，能够将垃圾回收时间控制在N毫秒内。这种“可预测的停顿”和高吞吐量特性让G1被称为&quot;功能最全的垃圾回收器&quot;。\nG1同时回收新生代和老年代，但是分别被称为G1的Young GC模式和Mixed GC模式。这个特性来源于G1独特的内存布局，内存分配不再严格遵守新生代，老年代的划分，而是以Region为单位，G1跟踪各个Region的并且维护一个关于Region的优先级列表。在合适的时机选择合适的Region进行回收。这种基于Region的内存划分为一些巧妙的设计思想提供了解决停顿时间和高吞吐的基础。接下来我们将详细讲解G1的详细垃圾回收过程和里面可圈可点的设计。\nRegion内存划分 G1将堆划分为一系列大小不等的内存区域，称为Region(单词语义范围，地区，接下来我简述为分区)。每个region为1-32M，都是2的n次幂。在分代垃圾回收算法的思想下，region逻辑上划分为Eden，Survivor和老年代。每个分区都可能是eden区，Survivor区也可能是old区，但在一个时刻只能是一种分区。各种角色的region个数都是不固定的，这说明每个代的内存也是不固定的。这些region在逻辑上是连续的，而不是物理上连续，这点和之前的young/old区物理连续很不一样。\n除了前面说的Eden区，Survivor区，old区，G1中还有一种特殊的分区，Humongous区。Humongous用于存放大对象。当一个对象的容量超过了Region大小的一半，就会把这个对象放进Humongous分区，因为如果对一个短期存在的大对象使用复制算法回收的话，复制成本非常高。而直接放进old区则导致原本应该短期存在的对象占用了老年代的内存，更加不利于回收性能。如果一个对象的大小超过了一个Region的大小，那么就需要找到连续的Humogous分区来存放这个大对象。有时候因为找不到连续的Humogous分区甚至不得不开启Full GC。\nRegion内部结构 Card Table卡表 Card Table是Region的内部结构划分。每个region内部被划分为若干的内存块，被称为card。这些card集合被称为card table，卡表。\n比如下面的例子，region1中的内存区域被划分为9块card，9块card的集合就是卡表card table。\nRset记忆集合 除了卡表，每个region中都含有Remember Set，简称RSet。RSet其实是hash表，key为引用本region的其他region起始地址，value为本region中被key对应的region引用的card索引位置。\n这里必须讲解一下RSet存在的原因，RSet是为了解决&quot;跨代引用&quot;。想象一下，一个新生代对象被老年代对象引用，那么为了通过引用链找到这个新生代对象，从GC Roots出发遍历对象时必须经过老年代对象。实际上以这种方式遍历时，是把所有对象都遍历了一遍。但是我们的其实只想回收新生代的对象，却把所有对象都遍历了一遍，这无疑很低效。\n在YoungGC时，当RSet存在时，顺着引用链查找引用。如果引用链上出现了老年代对象，那么直接放弃查找这条引用链。当整个GC Root Tracing执行完毕后，就知道了除被跨代引用外还存活的新生代对象。紧接着再遍历新生代Region的RSet，如果RSet里存在key为老年代的Region，就将key对应的value代表的card的对象标记为存活，这样就标记到了被跨代引用的新生代对象。\n当然这么做会存在一个问题，如果部分老年代对象是应该被回收的对象，但还是跨代引用了新生代，会导致原本应该被回收的新生代对象躲过本轮新生代回收。这部分对象就只能等到后续的老年代的垃圾回收mixed GC来回收掉。这也是为什么G1的回收精度比较低的原因之一。\n以这幅图为例，region1和region2都引用了region3中的对象，那么region3的RSet中有两个key，分别是region1的起始地址和region2的起始地址。\n在扫描region3的RSet时，发现key为0x6a的region是一个old区region。如果这时第3，5card对应的对象没有被标记为可达，那么这里就会根据RSet再次标记。\n同样的，key为0x9b对应的region是一个young区域的region，那么0，2号card的对象则不会被标记。\nYoung GC流程 在了解了region的内部结构之后，我们再来看一下G1的young gc的具体流程。\nstop the world，整个young gc的流程都是在stw里进行的，这也是为什么young gc能回收全部eden区域的原因。控制young gc开销的办法只有减少young region的个数，也就是减少年轻代内存的大小，还有就是并发，多个线程同时进行gc，尽量减少stw时间。\n扫描GCRoots，注意这里扫描的GC Roots就是一般意义上的GC Roots，是扫描的直接指向young代的对象，那如果GC Root是直接指向老年代对象的，则会直接停止在这一步，也就是不往下扫描了。被老年代对象指向的young代对象会在接下来的利用Rset中key指向老年代的卡表识别出来，这样就避免了对老年代整个大的heap扫描，提高了效率。这也是为什么Rset能避免对老年代整体扫描的原因。\n排空dirty card quene，更新Rset。Rset中记录了哪些对象被老年代跨带引用，也就是当新生代对象被老年代对象引用时，应该更新这个记录到RSet中。但更新RSet记录的时机不是伴随着引用更改马上发生的。每当老年代引用新生代对象时，这个引用记录对应的card地址其实会被放入Dirty Card Queue（线程私有的，当线程私有的dirty card queue满了之后会被转移到全局的dirty card queue，这个全局是惟一的），原因是如果每次更新引用时直接更新Rset会导致多线程竞争，因为赋值操作很频繁，影响性能。所以更新Rset交由Refinement线程来进行。全局DirtyCardQueue的容量变化分为4个阶段\n">
 <meta property='og:url' content='http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/'>
-<meta property='og:site_name' content='javashitu的博客'>
+<meta property='og:site_name' content='javashitu'>
 <meta property='og:type' content='article'><meta property='article:section' content='Post' /><meta property='article:tag' content='jvm' /><meta property='article:tag' content='垃圾回收器' /><meta property='article:tag' content='ZGC' /><meta property='article:tag' content='G1' /><meta property='article:published_time' content='2023-12-31T00:00:00&#43;00:00'/><meta property='article:modified_time' content='2023-12-31T00:00:00&#43;00:00'/><meta property='og:image' content='http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/cover.jpg' />
 <meta name="twitter:title" content="jvm垃圾回收器后篇">
 <meta name="twitter:description" content="学习背景 经过了垃圾回收器的理论学习，我们基本掌握了垃圾回收器的一些基本思想。但是想达到能随便应对面试的情况还不够，我们还需要了解一些具体的垃圾回收器的执行过程，以此来让面试官感觉耳目一新。如果没看过垃圾回收器理论的朋友可以看一下我的上一篇文章。\n垃圾回收器介绍 G1(Garbage First)垃圾回收器 G1垃圾收集器在JDK7被开发出来，JDK8功能基本完全实现。并且成功替换掉了Parallel Scavenge成为了服务端模式下默认的垃圾收集器。对比起另外一个垃圾回收器CMS，G1不仅能提供能提供规整的内存，而且能够实现可预测的停顿，能够将垃圾回收时间控制在N毫秒内。这种“可预测的停顿”和高吞吐量特性让G1被称为&quot;功能最全的垃圾回收器&quot;。\nG1同时回收新生代和老年代，但是分别被称为G1的Young GC模式和Mixed GC模式。这个特性来源于G1独特的内存布局，内存分配不再严格遵守新生代，老年代的划分，而是以Region为单位，G1跟踪各个Region的并且维护一个关于Region的优先级列表。在合适的时机选择合适的Region进行回收。这种基于Region的内存划分为一些巧妙的设计思想提供了解决停顿时间和高吞吐的基础。接下来我们将详细讲解G1的详细垃圾回收过程和里面可圈可点的设计。\nRegion内存划分 G1将堆划分为一系列大小不等的内存区域，称为Region(单词语义范围，地区，接下来我简述为分区)。每个region为1-32M，都是2的n次幂。在分代垃圾回收算法的思想下，region逻辑上划分为Eden，Survivor和老年代。每个分区都可能是eden区，Survivor区也可能是old区，但在一个时刻只能是一种分区。各种角色的region个数都是不固定的，这说明每个代的内存也是不固定的。这些region在逻辑上是连续的，而不是物理上连续，这点和之前的young/old区物理连续很不一样。\n除了前面说的Eden区，Survivor区，old区，G1中还有一种特殊的分区，Humongous区。Humongous用于存放大对象。当一个对象的容量超过了Region大小的一半，就会把这个对象放进Humongous分区，因为如果对一个短期存在的大对象使用复制算法回收的话，复制成本非常高。而直接放进old区则导致原本应该短期存在的对象占用了老年代的内存，更加不利于回收性能。如果一个对象的大小超过了一个Region的大小，那么就需要找到连续的Humogous分区来存放这个大对象。有时候因为找不到连续的Humogous分区甚至不得不开启Full GC。\nRegion内部结构 Card Table卡表 Card Table是Region的内部结构划分。每个region内部被划分为若干的内存块，被称为card。这些card集合被称为card table，卡表。\n比如下面的例子，region1中的内存区域被划分为9块card，9块card的集合就是卡表card table。\nRset记忆集合 除了卡表，每个region中都含有Remember Set，简称RSet。RSet其实是hash表，key为引用本region的其他region起始地址，value为本region中被key对应的region引用的card索引位置。\n这里必须讲解一下RSet存在的原因，RSet是为了解决&quot;跨代引用&quot;。想象一下，一个新生代对象被老年代对象引用，那么为了通过引用链找到这个新生代对象，从GC Roots出发遍历对象时必须经过老年代对象。实际上以这种方式遍历时，是把所有对象都遍历了一遍。但是我们的其实只想回收新生代的对象，却把所有对象都遍历了一遍，这无疑很低效。\n在YoungGC时，当RSet存在时，顺着引用链查找引用。如果引用链上出现了老年代对象，那么直接放弃查找这条引用链。当整个GC Root Tracing执行完毕后，就知道了除被跨代引用外还存活的新生代对象。紧接着再遍历新生代Region的RSet，如果RSet里存在key为老年代的Region，就将key对应的value代表的card的对象标记为存活，这样就标记到了被跨代引用的新生代对象。\n当然这么做会存在一个问题，如果部分老年代对象是应该被回收的对象，但还是跨代引用了新生代，会导致原本应该被回收的新生代对象躲过本轮新生代回收。这部分对象就只能等到后续的老年代的垃圾回收mixed GC来回收掉。这也是为什么G1的回收精度比较低的原因之一。\n以这幅图为例，region1和region2都引用了region3中的对象，那么region3的RSet中有两个key，分别是region1的起始地址和region2的起始地址。\n在扫描region3的RSet时，发现key为0x6a的region是一个old区region。如果这时第3，5card对应的对象没有被标记为可达，那么这里就会根据RSet再次标记。\n同样的，key为0x9b对应的region是一个young区域的region，那么0，2号card的对象则不会被标记。\nYoung GC流程 在了解了region的内部结构之后，我们再来看一下G1的young gc的具体流程。\nstop the world，整个young gc的流程都是在stw里进行的，这也是为什么young gc能回收全部eden区域的原因。控制young gc开销的办法只有减少young region的个数，也就是减少年轻代内存的大小，还有就是并发，多个线程同时进行gc，尽量减少stw时间。\n扫描GCRoots，注意这里扫描的GC Roots就是一般意义上的GC Roots，是扫描的直接指向young代的对象，那如果GC Root是直接指向老年代对象的，则会直接停止在这一步，也就是不往下扫描了。被老年代对象指向的young代对象会在接下来的利用Rset中key指向老年代的卡表识别出来，这样就避免了对老年代整个大的heap扫描，提高了效率。这也是为什么Rset能避免对老年代整体扫描的原因。\n排空dirty card quene，更新Rset。Rset中记录了哪些对象被老年代跨带引用，也就是当新生代对象被老年代对象引用时，应该更新这个记录到RSet中。但更新RSet记录的时机不是伴随着引用更改马上发生的。每当老年代引用新生代对象时，这个引用记录对应的card地址其实会被放入Dirty Card Queue（线程私有的，当线程私有的dirty card queue满了之后会被转移到全局的dirty card queue，这个全局是惟一的），原因是如果每次更新引用时直接更新Rset会导致多线程竞争，因为赋值操作很频繁，影响性能。所以更新Rset交由Refinement线程来进行。全局DirtyCardQueue的容量变化分为4个阶段\n"><meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:image" content='http://localhost:1313/p/jvm%E5%9E%83%E5%9C%BE%E5%9B%9E%E6%94%B6%E5%99%A8%E5%90%8E%E7%AF%87/index.assets/cover.jpg' />
-    <link rel="shortcut icon" href="/javashitu.jpg" />
-
     </head>
     <body class="
     article-page
@@ -70,10 +68,25 @@
         
         
         <div class="site-meta">
-            <h1 class="site-name"><a href="/">javashitu的博客</a></h1>
+            <h1 class="site-name"><a href="/">javashitu</a></h1>
             <h2 class="site-description">退笔如山未足珍，读书万卷始通神</h2>
         </div>
     </header><ol class="menu-social">
+            
+                <li>
+                    <a 
+                        href='https://space.bilibili.com/1825238836'
+                        target="_blank"
+                        title="Bilibili"
+                        rel="me"
+                    >
+                        
+                        
+                            <?xml version="1.0" encoding="utf-8"?><!-- Uploaded to: SVG Repo, www.svgrepo.com, Generator: SVG Repo Mixer Tools -->
+<svg width="800px" height="800px" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><defs><style>.a{fill:none;stroke:#000000;stroke-linecap:round;stroke-linejoin:round;}</style></defs><rect class="a" x="6.1336" y="9.4032" width="35.7327" height="26.5581" rx="6.7532"/><line class="a" x1="17.4835" y1="4.5" x2="20.4078" y2="9.4032"/><line class="a" x1="13.2594" y1="21.6849" x2="20.0829" y2="18.9592"/><line class="a" x1="30.5165" y1="4.5" x2="27.5922" y2="9.4032"/><line class="a" x1="34.7406" y1="21.6849" x2="27.9171" y2="18.9592"/><path class="a" d="M29.0544,24.9161c-.5827,1.4721-1.1508,2.54-2.5273,2.54-1.074,0-1.666-.4976-2.5271-1.8363-.8611,1.3387-1.4531,1.8363-2.5271,1.8363-1.3765,0-1.9446-1.0682-2.5273-2.54"/><path class="a" d="M25.9676,35.9613v2.033s8.6917.2889,8.6917,5.5057H13.3407c0-5.2168,8.6917-5.5057,8.6917-5.5057v-2.033"/></svg>
+                        
+                    </a>
+                </li>
             
                 <li>
                     <a 
@@ -115,6 +128,25 @@
 
                 
                 <span>主页</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/%E5%85%B3%E4%BA%8E/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-user" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="7" r="4" />
+  <path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />
+</svg>
+
+
+
+                
+                <span>关于</span>
             </a>
         </li>
         
@@ -178,6 +210,29 @@
         
         <li class="menu-bottom-section">
             <ol class="menu">
+                    
+                        <li id="i18n-switch">  
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-language" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M4 5h7" />
+  <path d="M9 3v2c0 4.418 -2.239 8 -5 8" />
+  <path d="M5 9c-.003 2.144 2.952 3.908 6.7 4" />
+  <path d="M12 20l4 -9l4 9" />
+  <path d="M19.1 18h-6.2" />
+</svg>
+
+
+
+                            <select name="language" title="language" onchange="window.location.href = this.selectedOptions[0].value">
+                                
+                                    <option value="http://localhost:1313/en/" >English</option>
+                                
+                                    <option value="http://localhost:1313/" selected>中文</option>
+                                
+                            </select>
+                        </li>
+                    
+                
 
                 
                     <li id="dark-mode-toggle">
@@ -328,6 +383,22 @@
             </div>
         
 
+        
+            <div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-clock" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <polyline points="12 7 12 12 15 15" />
+</svg>
+
+
+
+                
+                <time class="article-time--reading">
+                    
+                    55min
+                </time>
+            </div>
         
     </footer>
     
@@ -973,9 +1044,7 @@ Forwarding table是记录对象被迁移后的新旧引用的映射表。Relocat
     <section class="copyright">
         &copy; 
         
-            2023 - 
-        
-        2025 javashitu的博客
+        2025 javashitu
     </section>
     
     <section class="powerby">
@@ -1069,7 +1138,7 @@ Forwarding table是记录对象被迁移后的新旧引用的映射表。Relocat
                 src="https://cdn.jsdelivr.net/npm/node-vibrant@3.1.6/dist/vibrant.min.js"integrity="sha256-awcR2jno4kI5X0zL8ex0vi2z&#43;KMkF24hUW8WePSA9HM="crossorigin="anonymous"
                 
                 >
-            </script><script type="text/javascript" src="/ts/main.6f85c0570361e9fcd383cd0c8cdc21d0052ff5c72675accf2fc6b86ed3b3e58b.js" defer></script>
+            </script><script type="text/javascript" src="/ts/main.3a1a8966cafbfc78457f276ea131a0bdd7155858067cf76100572a15ddfcb82a.js" defer></script>
 <script>
     (function () {
         const customFont = document.createElement('link');

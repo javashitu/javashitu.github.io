@@ -9,13 +9,11 @@
 <link rel="stylesheet" href="/scss/style.min.946cca6c6259ef94ac55abfae7c7bf3291ea3ed5eea17ef77500b257217c6710.css"><meta property='og:title' content="kafka是如何写入消息的">
 <meta property='og:description' content="学习背景 今天我们来学习一下KAFKA的消息如何发送的。kafka消息的发送可以分为从客户端写入和服务端写入两部分，今天先将第一部分，客户端怎么写入的。\nKAFKA基本概念 在正式开始介绍kafka之前，先了解一下kafka内的基本概念，这些基本概念是接下来讲解发送流程的基础。\nbroker kafka实例：每台机器上可以部署一个或者多个kafka实例，一般一台机器一个，我们可以认为一个kafka实例代表一台实际的对外提供服务的kafka物理机。kafka集群内实例用编号区分。例如broker-0，broker-1\ntopic 主题：每条消息的归属依据。\npartition 分区： 每个主题有多个partitioon，partition可以认为是对主题下消息的二次分类，不同分区之间的数据是不重复的。分区在物理存储上的表现形式就是一个个的文件夹。\nreplication 副本: 副本是分区的实际实现，每个分区都有多个副本，但是只有一个服务对外提供服务，我们称为leader副本，其他副本称为flower。副本的作用是用来做备份，做leader挂掉时follower之间选举出新的leader，follower和leader绝不在同一个broker上。副本的概念理解起来很复杂，这里大家可能听得云里雾里的，没关系副本机制可以说是kafka的核心。先放着，一会讲完flower之间选举机制就明白了。\nproducer 生产者: 向topic写入消息的程序。\nmessage: 生产者实际发送的消息主体。\nconsumer 消费者：向topic订阅并消费消息的程序。\nconsumer group: 消费者组，划分consumer的依据，同一个组内的消费者能够消费同一个topic中的数据。\n消息发送流程 客户端发送 让我们从一个例子来开始，一个简单的发送消息的例子。这里我定义了一个producer，并且自己实现了拦截器，序列化器，分区器。可能大家看到之类很陌生，因为一般不需要自定义这些组件，统统用默认的就可以了。这里我自定义这些组件仅仅为了做讲解。\n从kafka的组件设计来讲，消息使用producer.send发送(当然还有异步发送，但是这不是重点)后，会顺序的经过拦截器，序列化器，分区器。三个组件的作用分别讲解一下。\n消息最先抵达的是拦截器，拦截器的存在是为了在消息被发送之前做一些统一的修改或者统计，比如打印日志，统计每个topci发送的消息等等。从拦截器最后的返回结果我们可以看出来，这一步其实可以修改很多东西，甚至是消息发送的topic，partition都是可以更改的。当然一般不会有人这么干，因为这相当于篡改了原始消息内容。\n拦截器之后经过的是序列化器，序列化器的目的是为了将消息序列化为字节数组，这里我自定义了一个和简单的序列化方式，直接序列化为JSON字符串再转换为字符数组。当然如果我们直接写入JSON格式字符串，那么使用默认的字符序列化器也是可以的。而且大部分情况下，我们应该尽量直接发送字符串，这样不至于每次变更消息格式都需要再改一遍序列化器的代码。\n消息被序列化之后就到了分区器，分区器的作用只有一个，选择消息最重要发往那个分区。分区器一般也是不需要手动定义的，使用kafka默认的分区器就可以。当然，我们还可以在发送消息的位置，指定一个消息的分区，这样就会被发往我们想要发送的分区。或者我们指定一个消息的key，kafka则会根据key计算出一个hash值然后使用这个分区。这个特性非常有用，我们可以利用这个特点将很多相同&quot;分类&quot;的消息发送到同一个分区，比如消息里有个字段叫做orderId，那么我们根据orderId作为分区的key，就可以保证同一个订单的消息被发往同一个分区，这样如果订单的生命周期发生变化，那么生命周期变化的消息会被顺序的写入到分区内(这种场景高并发多线程写入其实还是会有问题，需要考虑状态机的流转和回退问题，但是可以通过拉长生命周期来避免)。如果不指定分区，也不指定消息key，kafka则会在各个分区之间轮训的写入消息。\n到这里大家是不是以为就完了，这就算消息发送完毕了？当然不是，我们好药探究kafka在消息发送过程里到底做了那些事情。先看一幅图。\n实际上，在创建的kafka producer内，有2个线程，一个是主线程，也就是我们执行send方法的线程，一个是sender线程。我们来看看这两个线程分别做了什么。\n消息在经过分区器确定要发往那个分区之后，会被写入到record accumulator(消息累加器)，并且会将若干条消息合并为一个record batch，每个record batch的大小由参数batch.size指定，默认16K。将多条消息合并是为了减少发送消息的次数，这样原本需要多次发送的消息只需要一次发送即可，当然这里还没实际执行发送的。每个record batch其实是放在一个双向队列Deque里的，消息在被发到消息收集器record accumulator后会找到自己所属的分区对应的deque，并判断需要将消息加入到队尾的record batch还是新建一个record batch。这里有个问题，如果消息超过了record batch的大小会怎么样？其实会按照消息大小来新建一个record batch，不过这个新建的record batch使用完毕就被回收了。而一般的record batch则会被复用。\n">
 <meta property='og:url' content='http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/'>
-<meta property='og:site_name' content='javashitu的博客'>
+<meta property='og:site_name' content='javashitu'>
 <meta property='og:type' content='article'><meta property='article:section' content='Post' /><meta property='article:tag' content='kafka' /><meta property='article:tag' content='生产者' /><meta property='article:published_time' content='2024-09-01T00:00:00&#43;00:00'/><meta property='article:modified_time' content='2024-09-01T00:00:00&#43;00:00'/><meta property='og:image' content='http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/cover.jpg' />
 <meta name="twitter:title" content="kafka是如何写入消息的">
 <meta name="twitter:description" content="学习背景 今天我们来学习一下KAFKA的消息如何发送的。kafka消息的发送可以分为从客户端写入和服务端写入两部分，今天先将第一部分，客户端怎么写入的。\nKAFKA基本概念 在正式开始介绍kafka之前，先了解一下kafka内的基本概念，这些基本概念是接下来讲解发送流程的基础。\nbroker kafka实例：每台机器上可以部署一个或者多个kafka实例，一般一台机器一个，我们可以认为一个kafka实例代表一台实际的对外提供服务的kafka物理机。kafka集群内实例用编号区分。例如broker-0，broker-1\ntopic 主题：每条消息的归属依据。\npartition 分区： 每个主题有多个partitioon，partition可以认为是对主题下消息的二次分类，不同分区之间的数据是不重复的。分区在物理存储上的表现形式就是一个个的文件夹。\nreplication 副本: 副本是分区的实际实现，每个分区都有多个副本，但是只有一个服务对外提供服务，我们称为leader副本，其他副本称为flower。副本的作用是用来做备份，做leader挂掉时follower之间选举出新的leader，follower和leader绝不在同一个broker上。副本的概念理解起来很复杂，这里大家可能听得云里雾里的，没关系副本机制可以说是kafka的核心。先放着，一会讲完flower之间选举机制就明白了。\nproducer 生产者: 向topic写入消息的程序。\nmessage: 生产者实际发送的消息主体。\nconsumer 消费者：向topic订阅并消费消息的程序。\nconsumer group: 消费者组，划分consumer的依据，同一个组内的消费者能够消费同一个topic中的数据。\n消息发送流程 客户端发送 让我们从一个例子来开始，一个简单的发送消息的例子。这里我定义了一个producer，并且自己实现了拦截器，序列化器，分区器。可能大家看到之类很陌生，因为一般不需要自定义这些组件，统统用默认的就可以了。这里我自定义这些组件仅仅为了做讲解。\n从kafka的组件设计来讲，消息使用producer.send发送(当然还有异步发送，但是这不是重点)后，会顺序的经过拦截器，序列化器，分区器。三个组件的作用分别讲解一下。\n消息最先抵达的是拦截器，拦截器的存在是为了在消息被发送之前做一些统一的修改或者统计，比如打印日志，统计每个topci发送的消息等等。从拦截器最后的返回结果我们可以看出来，这一步其实可以修改很多东西，甚至是消息发送的topic，partition都是可以更改的。当然一般不会有人这么干，因为这相当于篡改了原始消息内容。\n拦截器之后经过的是序列化器，序列化器的目的是为了将消息序列化为字节数组，这里我自定义了一个和简单的序列化方式，直接序列化为JSON字符串再转换为字符数组。当然如果我们直接写入JSON格式字符串，那么使用默认的字符序列化器也是可以的。而且大部分情况下，我们应该尽量直接发送字符串，这样不至于每次变更消息格式都需要再改一遍序列化器的代码。\n消息被序列化之后就到了分区器，分区器的作用只有一个，选择消息最重要发往那个分区。分区器一般也是不需要手动定义的，使用kafka默认的分区器就可以。当然，我们还可以在发送消息的位置，指定一个消息的分区，这样就会被发往我们想要发送的分区。或者我们指定一个消息的key，kafka则会根据key计算出一个hash值然后使用这个分区。这个特性非常有用，我们可以利用这个特点将很多相同&quot;分类&quot;的消息发送到同一个分区，比如消息里有个字段叫做orderId，那么我们根据orderId作为分区的key，就可以保证同一个订单的消息被发往同一个分区，这样如果订单的生命周期发生变化，那么生命周期变化的消息会被顺序的写入到分区内(这种场景高并发多线程写入其实还是会有问题，需要考虑状态机的流转和回退问题，但是可以通过拉长生命周期来避免)。如果不指定分区，也不指定消息key，kafka则会在各个分区之间轮训的写入消息。\n到这里大家是不是以为就完了，这就算消息发送完毕了？当然不是，我们好药探究kafka在消息发送过程里到底做了那些事情。先看一幅图。\n实际上，在创建的kafka producer内，有2个线程，一个是主线程，也就是我们执行send方法的线程，一个是sender线程。我们来看看这两个线程分别做了什么。\n消息在经过分区器确定要发往那个分区之后，会被写入到record accumulator(消息累加器)，并且会将若干条消息合并为一个record batch，每个record batch的大小由参数batch.size指定，默认16K。将多条消息合并是为了减少发送消息的次数，这样原本需要多次发送的消息只需要一次发送即可，当然这里还没实际执行发送的。每个record batch其实是放在一个双向队列Deque里的，消息在被发到消息收集器record accumulator后会找到自己所属的分区对应的deque，并判断需要将消息加入到队尾的record batch还是新建一个record batch。这里有个问题，如果消息超过了record batch的大小会怎么样？其实会按照消息大小来新建一个record batch，不过这个新建的record batch使用完毕就被回收了。而一般的record batch则会被复用。\n"><meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:image" content='http://localhost:1313/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/cover.jpg' />
-    <link rel="shortcut icon" href="/javashitu.jpg" />
-
     </head>
     <body class="
     article-page
@@ -70,10 +68,25 @@
         
         
         <div class="site-meta">
-            <h1 class="site-name"><a href="/">javashitu的博客</a></h1>
+            <h1 class="site-name"><a href="/">javashitu</a></h1>
             <h2 class="site-description">退笔如山未足珍，读书万卷始通神</h2>
         </div>
     </header><ol class="menu-social">
+            
+                <li>
+                    <a 
+                        href='https://space.bilibili.com/1825238836'
+                        target="_blank"
+                        title="Bilibili"
+                        rel="me"
+                    >
+                        
+                        
+                            <?xml version="1.0" encoding="utf-8"?><!-- Uploaded to: SVG Repo, www.svgrepo.com, Generator: SVG Repo Mixer Tools -->
+<svg width="800px" height="800px" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><defs><style>.a{fill:none;stroke:#000000;stroke-linecap:round;stroke-linejoin:round;}</style></defs><rect class="a" x="6.1336" y="9.4032" width="35.7327" height="26.5581" rx="6.7532"/><line class="a" x1="17.4835" y1="4.5" x2="20.4078" y2="9.4032"/><line class="a" x1="13.2594" y1="21.6849" x2="20.0829" y2="18.9592"/><line class="a" x1="30.5165" y1="4.5" x2="27.5922" y2="9.4032"/><line class="a" x1="34.7406" y1="21.6849" x2="27.9171" y2="18.9592"/><path class="a" d="M29.0544,24.9161c-.5827,1.4721-1.1508,2.54-2.5273,2.54-1.074,0-1.666-.4976-2.5271-1.8363-.8611,1.3387-1.4531,1.8363-2.5271,1.8363-1.3765,0-1.9446-1.0682-2.5273-2.54"/><path class="a" d="M25.9676,35.9613v2.033s8.6917.2889,8.6917,5.5057H13.3407c0-5.2168,8.6917-5.5057,8.6917-5.5057v-2.033"/></svg>
+                        
+                    </a>
+                </li>
             
                 <li>
                     <a 
@@ -115,6 +128,25 @@
 
                 
                 <span>主页</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/%E5%85%B3%E4%BA%8E/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-user" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="7" r="4" />
+  <path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />
+</svg>
+
+
+
+                
+                <span>关于</span>
             </a>
         </li>
         
@@ -178,6 +210,29 @@
         
         <li class="menu-bottom-section">
             <ol class="menu">
+                    
+                        <li id="i18n-switch">  
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-language" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M4 5h7" />
+  <path d="M9 3v2c0 4.418 -2.239 8 -5 8" />
+  <path d="M5 9c-.003 2.144 2.952 3.908 6.7 4" />
+  <path d="M12 20l4 -9l4 9" />
+  <path d="M19.1 18h-6.2" />
+</svg>
+
+
+
+                            <select name="language" title="language" onchange="window.location.href = this.selectedOptions[0].value">
+                                
+                                    <option value="http://localhost:1313/en/" >English</option>
+                                
+                                    <option value="http://localhost:1313/" selected>中文</option>
+                                
+                            </select>
+                        </li>
+                    
+                
 
                 
                     <li id="dark-mode-toggle">
@@ -293,6 +348,22 @@
             </div>
         
 
+        
+            <div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-clock" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <polyline points="12 7 12 12 15 15" />
+</svg>
+
+
+
+                
+                <time class="article-time--reading">
+                    
+                    14min
+                </time>
+            </div>
         
     </footer>
     
@@ -551,9 +622,7 @@ producer可以在消息发送之前使用压缩的方式将消息大小减少，
     <section class="copyright">
         &copy; 
         
-            2023 - 
-        
-        2025 javashitu的博客
+        2025 javashitu
     </section>
     
     <section class="powerby">
@@ -647,7 +716,7 @@ producer可以在消息发送之前使用压缩的方式将消息大小减少，
                 src="https://cdn.jsdelivr.net/npm/node-vibrant@3.1.6/dist/vibrant.min.js"integrity="sha256-awcR2jno4kI5X0zL8ex0vi2z&#43;KMkF24hUW8WePSA9HM="crossorigin="anonymous"
                 
                 >
-            </script><script type="text/javascript" src="/ts/main.6f85c0570361e9fcd383cd0c8cdc21d0052ff5c72675accf2fc6b86ed3b3e58b.js" defer></script>
+            </script><script type="text/javascript" src="/ts/main.3a1a8966cafbfc78457f276ea131a0bdd7155858067cf76100572a15ddfcb82a.js" defer></script>
 <script>
     (function () {
         const customFont = document.createElement('link');
