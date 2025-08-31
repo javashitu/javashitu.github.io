@@ -1,0 +1,687 @@
+<!DOCTYPE html>
+<html lang="zh-cn" dir="ltr">
+    <head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'><meta name='description' content="学习背景 接着上篇，我们来聊聊kafka数据在服务端怎么写入的\n服务端写入 在介绍服务端的写流程之前，我们先要理解服务端的几个角色之间的关系。\n假设我们有一个由3个broker组成的kafka集群，我们在这个集群上创建一个topic叫做shitu-topic，他有10个分区，每个分区有3个副本。那么partition和broker的关系假设如下。\n因为每个partition有3个副本，所以每个partition的副本都会均匀的分布在这三台机器上，我们取shitu-topic-0的副本来观察。\n在三个broker上，每个broker的log存储目录都有一个shitu-topic-0目录，我们可以成为shitu-topic-0分区，但是同一个时间，只有broker-0上的leader副本对外提供服务，broker-1和broker-2需要去到broker-0上同步消息。在shitu-topic-0目录下就是存储的实际的日志文件。日志文件里包含三个主要的文件内容.log文件存储实际的消息,.index文件存储索引,.timeindex文件存储时间索引。我们把这三个文件合称为一个logsegment日志段，每个log文件只要超过1G就会产生一个新的段文件。日志段文件的命名是以当前段内第一条消息的offset来命名的，这里因为是新创建的topic，第一条消息是0，所以都是0。因为消息是顺序写入的，所以只有最后一个日志段是激活的我们称为active segemnt，活跃段。比如这里活跃段就是00000000000020123000开头的段。\n研究消息的写入，就是研究这些文件时怎么产生的，让我们来看一下段文件里每个文件的组织格式。\n写入文件 log文件 .log文件存储实际的写入日志，也就是实际的数据存储位置。kafka的log文件存储格式经过了3次变化，目前使用的日志格式称为V2版本，我们取这个版本的日志格式来做讲解。\n上图左侧显示的是log文件的格式，我们把log文件内存储的的消息集合称为record batch,而每条消息我们称为一条record，每条record的格式如右边所示。record batch内的字段主要记录的整个log文件的全局属性，比如log文件的起始偏移量，文件长度，epoch，时间戳等等，不做详细解释，也不是重点。\n我们说一下每条消息的格式，我们知道每条消息除了实际的消息内容value外，伴随着每条消息的产生，还会产生这条消息的额外附带的信息，比如消息的偏移量，offsset，时间戳timestamp等等。kafka在设计消息的存储时花了很大的心思。\n这里我解释一下varint，varlong类型，简单的说，就是可变长的类型。比如一条消息的偏移量是int存储容量是4字节，比如存储10这个偏移量，虽然前面大部分是0，但是实际存储还是需要4字节。而varint则可以根据数据的范围选择合适的存储，比如还是10，那么实际记录这个值1个字节就够了。这样，当写入消息时，比如写入2条消息，偏移量分别是10和11，如果分别存储这两个偏移量，需要\n1 2 * 4B = 8b 而如果使用varint存储，则只需要\n1 2 * 1B + 4B(基础偏移量) = 6B 这里如果不是2条消息，而是10000条消息，那么这个优化就会非常有用。kafka这么做是为了尽最大的可能使用存储空间。当然除了数据格式上的优化，kafka还对数据进行了压缩，也就是records是可以配置不同的压缩算法进行压缩的，比如ZIP。\nindex文件 .index记录偏移量到实际消息的映射关系。一个很简单的述求，我们想知道某个偏移量的日志的内容，那么我们就需要一种能根据偏移量定位到消息的格式。\nindex文件的格式由相对偏移量realtive offset和物理偏移量position组成。当一条消息写入时，根据消息的偏移量计算出这条消息的相对偏移量，比如写入的是20123025这条消息，那么用20123025-20123000 = 25得到相对偏移量25，再记录下这消息的起始物理地址1024，即可组成对这条消息的索引。需要·注意的是，这里的索引是稀疏索引，也就是不是每条消息都会产生索引，而是每隔一些消息产生索引，这样能减少索引的文件大小。\n每一条索引的需要4B的相对偏偏移量和4B的物理地址偏移量，一共8B，kafka的服务端在设置index文件最大大小时要求index文件必须是索引项的整数倍，如果不是，则会自动转换成最接近的整数倍的数字。\n大家这里肯定很好奇那么怎么利用相对偏移量来查找消息，我们解释一下，其实对消息的查找可以概述为根据二分法查找。比如想要查找20123050这条偏移量的消息，先根据这个偏移量，去到我们当前副本的segement集合中根据segement的起始偏移量找到对应的segement，所有的segement的信息是根据相对偏移量以跳表的形式记录的。找到的对应的segement后先计算出相对偏移量20123050-20123000 = 50,然后根据50这个相对偏移量，我们去到相对偏量数组里，使用二分查找找到[20,75]这个相对偏移量范围，那么我们可以在log文件里从1024字节开始，逐条消息的解析，并计算出消息的偏移量是不是50，直到2147字节这个结束的位置为止。如果能找到，说明消息在本partition内，不能我们再换另外的partition查找。\n">
+<title>kafka数据在服务端是如何写入的</title>
+
+<link rel='canonical' href='http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/'>
+
+<link rel="stylesheet" href="/scss/style.min.946cca6c6259ef94ac55abfae7c7bf3291ea3ed5eea17ef77500b257217c6710.css"><meta property='og:title' content="kafka数据在服务端是如何写入的">
+<meta property='og:description' content="学习背景 接着上篇，我们来聊聊kafka数据在服务端怎么写入的\n服务端写入 在介绍服务端的写流程之前，我们先要理解服务端的几个角色之间的关系。\n假设我们有一个由3个broker组成的kafka集群，我们在这个集群上创建一个topic叫做shitu-topic，他有10个分区，每个分区有3个副本。那么partition和broker的关系假设如下。\n因为每个partition有3个副本，所以每个partition的副本都会均匀的分布在这三台机器上，我们取shitu-topic-0的副本来观察。\n在三个broker上，每个broker的log存储目录都有一个shitu-topic-0目录，我们可以成为shitu-topic-0分区，但是同一个时间，只有broker-0上的leader副本对外提供服务，broker-1和broker-2需要去到broker-0上同步消息。在shitu-topic-0目录下就是存储的实际的日志文件。日志文件里包含三个主要的文件内容.log文件存储实际的消息,.index文件存储索引,.timeindex文件存储时间索引。我们把这三个文件合称为一个logsegment日志段，每个log文件只要超过1G就会产生一个新的段文件。日志段文件的命名是以当前段内第一条消息的offset来命名的，这里因为是新创建的topic，第一条消息是0，所以都是0。因为消息是顺序写入的，所以只有最后一个日志段是激活的我们称为active segemnt，活跃段。比如这里活跃段就是00000000000020123000开头的段。\n研究消息的写入，就是研究这些文件时怎么产生的，让我们来看一下段文件里每个文件的组织格式。\n写入文件 log文件 .log文件存储实际的写入日志，也就是实际的数据存储位置。kafka的log文件存储格式经过了3次变化，目前使用的日志格式称为V2版本，我们取这个版本的日志格式来做讲解。\n上图左侧显示的是log文件的格式，我们把log文件内存储的的消息集合称为record batch,而每条消息我们称为一条record，每条record的格式如右边所示。record batch内的字段主要记录的整个log文件的全局属性，比如log文件的起始偏移量，文件长度，epoch，时间戳等等，不做详细解释，也不是重点。\n我们说一下每条消息的格式，我们知道每条消息除了实际的消息内容value外，伴随着每条消息的产生，还会产生这条消息的额外附带的信息，比如消息的偏移量，offsset，时间戳timestamp等等。kafka在设计消息的存储时花了很大的心思。\n这里我解释一下varint，varlong类型，简单的说，就是可变长的类型。比如一条消息的偏移量是int存储容量是4字节，比如存储10这个偏移量，虽然前面大部分是0，但是实际存储还是需要4字节。而varint则可以根据数据的范围选择合适的存储，比如还是10，那么实际记录这个值1个字节就够了。这样，当写入消息时，比如写入2条消息，偏移量分别是10和11，如果分别存储这两个偏移量，需要\n1 2 * 4B = 8b 而如果使用varint存储，则只需要\n1 2 * 1B + 4B(基础偏移量) = 6B 这里如果不是2条消息，而是10000条消息，那么这个优化就会非常有用。kafka这么做是为了尽最大的可能使用存储空间。当然除了数据格式上的优化，kafka还对数据进行了压缩，也就是records是可以配置不同的压缩算法进行压缩的，比如ZIP。\nindex文件 .index记录偏移量到实际消息的映射关系。一个很简单的述求，我们想知道某个偏移量的日志的内容，那么我们就需要一种能根据偏移量定位到消息的格式。\nindex文件的格式由相对偏移量realtive offset和物理偏移量position组成。当一条消息写入时，根据消息的偏移量计算出这条消息的相对偏移量，比如写入的是20123025这条消息，那么用20123025-20123000 = 25得到相对偏移量25，再记录下这消息的起始物理地址1024，即可组成对这条消息的索引。需要·注意的是，这里的索引是稀疏索引，也就是不是每条消息都会产生索引，而是每隔一些消息产生索引，这样能减少索引的文件大小。\n每一条索引的需要4B的相对偏偏移量和4B的物理地址偏移量，一共8B，kafka的服务端在设置index文件最大大小时要求index文件必须是索引项的整数倍，如果不是，则会自动转换成最接近的整数倍的数字。\n大家这里肯定很好奇那么怎么利用相对偏移量来查找消息，我们解释一下，其实对消息的查找可以概述为根据二分法查找。比如想要查找20123050这条偏移量的消息，先根据这个偏移量，去到我们当前副本的segement集合中根据segement的起始偏移量找到对应的segement，所有的segement的信息是根据相对偏移量以跳表的形式记录的。找到的对应的segement后先计算出相对偏移量20123050-20123000 = 50,然后根据50这个相对偏移量，我们去到相对偏量数组里，使用二分查找找到[20,75]这个相对偏移量范围，那么我们可以在log文件里从1024字节开始，逐条消息的解析，并计算出消息的偏移量是不是50，直到2147字节这个结束的位置为止。如果能找到，说明消息在本partition内，不能我们再换另外的partition查找。\n">
+<meta property='og:url' content='http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/'>
+<meta property='og:site_name' content='javashitu'>
+<meta property='og:type' content='article'><meta property='article:section' content='Post' /><meta property='article:tag' content='kafka' /><meta property='article:tag' content='Broker' /><meta property='article:published_time' content='2024-11-28T00:00:00&#43;00:00'/><meta property='article:modified_time' content='2024-11-28T00:00:00&#43;00:00'/><meta property='og:image' content='http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/cover.jpg' />
+<meta name="twitter:title" content="kafka数据在服务端是如何写入的">
+<meta name="twitter:description" content="学习背景 接着上篇，我们来聊聊kafka数据在服务端怎么写入的\n服务端写入 在介绍服务端的写流程之前，我们先要理解服务端的几个角色之间的关系。\n假设我们有一个由3个broker组成的kafka集群，我们在这个集群上创建一个topic叫做shitu-topic，他有10个分区，每个分区有3个副本。那么partition和broker的关系假设如下。\n因为每个partition有3个副本，所以每个partition的副本都会均匀的分布在这三台机器上，我们取shitu-topic-0的副本来观察。\n在三个broker上，每个broker的log存储目录都有一个shitu-topic-0目录，我们可以成为shitu-topic-0分区，但是同一个时间，只有broker-0上的leader副本对外提供服务，broker-1和broker-2需要去到broker-0上同步消息。在shitu-topic-0目录下就是存储的实际的日志文件。日志文件里包含三个主要的文件内容.log文件存储实际的消息,.index文件存储索引,.timeindex文件存储时间索引。我们把这三个文件合称为一个logsegment日志段，每个log文件只要超过1G就会产生一个新的段文件。日志段文件的命名是以当前段内第一条消息的offset来命名的，这里因为是新创建的topic，第一条消息是0，所以都是0。因为消息是顺序写入的，所以只有最后一个日志段是激活的我们称为active segemnt，活跃段。比如这里活跃段就是00000000000020123000开头的段。\n研究消息的写入，就是研究这些文件时怎么产生的，让我们来看一下段文件里每个文件的组织格式。\n写入文件 log文件 .log文件存储实际的写入日志，也就是实际的数据存储位置。kafka的log文件存储格式经过了3次变化，目前使用的日志格式称为V2版本，我们取这个版本的日志格式来做讲解。\n上图左侧显示的是log文件的格式，我们把log文件内存储的的消息集合称为record batch,而每条消息我们称为一条record，每条record的格式如右边所示。record batch内的字段主要记录的整个log文件的全局属性，比如log文件的起始偏移量，文件长度，epoch，时间戳等等，不做详细解释，也不是重点。\n我们说一下每条消息的格式，我们知道每条消息除了实际的消息内容value外，伴随着每条消息的产生，还会产生这条消息的额外附带的信息，比如消息的偏移量，offsset，时间戳timestamp等等。kafka在设计消息的存储时花了很大的心思。\n这里我解释一下varint，varlong类型，简单的说，就是可变长的类型。比如一条消息的偏移量是int存储容量是4字节，比如存储10这个偏移量，虽然前面大部分是0，但是实际存储还是需要4字节。而varint则可以根据数据的范围选择合适的存储，比如还是10，那么实际记录这个值1个字节就够了。这样，当写入消息时，比如写入2条消息，偏移量分别是10和11，如果分别存储这两个偏移量，需要\n1 2 * 4B = 8b 而如果使用varint存储，则只需要\n1 2 * 1B + 4B(基础偏移量) = 6B 这里如果不是2条消息，而是10000条消息，那么这个优化就会非常有用。kafka这么做是为了尽最大的可能使用存储空间。当然除了数据格式上的优化，kafka还对数据进行了压缩，也就是records是可以配置不同的压缩算法进行压缩的，比如ZIP。\nindex文件 .index记录偏移量到实际消息的映射关系。一个很简单的述求，我们想知道某个偏移量的日志的内容，那么我们就需要一种能根据偏移量定位到消息的格式。\nindex文件的格式由相对偏移量realtive offset和物理偏移量position组成。当一条消息写入时，根据消息的偏移量计算出这条消息的相对偏移量，比如写入的是20123025这条消息，那么用20123025-20123000 = 25得到相对偏移量25，再记录下这消息的起始物理地址1024，即可组成对这条消息的索引。需要·注意的是，这里的索引是稀疏索引，也就是不是每条消息都会产生索引，而是每隔一些消息产生索引，这样能减少索引的文件大小。\n每一条索引的需要4B的相对偏偏移量和4B的物理地址偏移量，一共8B，kafka的服务端在设置index文件最大大小时要求index文件必须是索引项的整数倍，如果不是，则会自动转换成最接近的整数倍的数字。\n大家这里肯定很好奇那么怎么利用相对偏移量来查找消息，我们解释一下，其实对消息的查找可以概述为根据二分法查找。比如想要查找20123050这条偏移量的消息，先根据这个偏移量，去到我们当前副本的segement集合中根据segement的起始偏移量找到对应的segement，所有的segement的信息是根据相对偏移量以跳表的形式记录的。找到的对应的segement后先计算出相对偏移量20123050-20123000 = 50,然后根据50这个相对偏移量，我们去到相对偏量数组里，使用二分查找找到[20,75]这个相对偏移量范围，那么我们可以在log文件里从1024字节开始，逐条消息的解析，并计算出消息的偏移量是不是50，直到2147字节这个结束的位置为止。如果能找到，说明消息在本partition内，不能我们再换另外的partition查找。\n"><meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content='http://localhost:1313/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/cover.jpg' />
+    </head>
+    <body class="
+    article-page
+    ">
+    <script>
+        (function() {
+            const colorSchemeKey = 'StackColorScheme';
+            if(!localStorage.getItem(colorSchemeKey)){
+                localStorage.setItem(colorSchemeKey, "auto");
+            }
+        })();
+    </script><script>
+    (function() {
+        const colorSchemeKey = 'StackColorScheme';
+        const colorSchemeItem = localStorage.getItem(colorSchemeKey);
+        const supportDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches === true;
+
+        if (colorSchemeItem == 'dark' || colorSchemeItem === 'auto' && supportDarkMode) {
+            
+
+            document.documentElement.dataset.scheme = 'dark';
+        } else {
+            document.documentElement.dataset.scheme = 'light';
+        }
+    })();
+</script>
+<div class="container main-container flex on-phone--column extended"><aside class="sidebar left-sidebar sticky ">
+    <button class="hamburger hamburger--spin" type="button" id="toggle-menu" aria-label="切换菜单">
+        <span class="hamburger-box">
+            <span class="hamburger-inner"></span>
+        </span>
+    </button>
+
+    <header>
+        
+            
+            <figure class="site-avatar">
+                <a href="/">
+                
+                    
+                    
+                    
+                        
+                        <img src="/img/javashitu_hu_4b8114d532ed8b7b.jpg" width="300"
+                            height="300" class="site-logo" loading="lazy" alt="Avatar">
+                    
+                
+                </a>
+                
+            </figure>
+            
+        
+        
+        <div class="site-meta">
+            <h1 class="site-name"><a href="/">javashitu</a></h1>
+            <h2 class="site-description">退笔如山未足珍，读书万卷始通神</h2>
+        </div>
+    </header><ol class="menu-social">
+            
+                <li>
+                    <a 
+                        href='https://github.com/javashitu'
+                        target="_blank"
+                        title="GitHub"
+                        rel="me"
+                    >
+                        
+                        
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-brand-github" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5" />
+</svg>
+
+
+
+                        
+                    </a>
+                </li>
+            
+                <li>
+                    <a 
+                        href='https://space.bilibili.com/1825238836'
+                        target="_blank"
+                        title="Bilibili"
+                        rel="me"
+                    >
+                        
+                        
+                            <?xml version="1.0" encoding="utf-8"?><!-- Uploaded to: SVG Repo, www.svgrepo.com, Generator: SVG Repo Mixer Tools -->
+<svg width="800px" height="800px" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><defs><style>.a{fill:none;stroke:#000000;stroke-linecap:round;stroke-linejoin:round;}</style></defs><rect class="a" x="6.1336" y="9.4032" width="35.7327" height="26.5581" rx="6.7532"/><line class="a" x1="17.4835" y1="4.5" x2="20.4078" y2="9.4032"/><line class="a" x1="13.2594" y1="21.6849" x2="20.0829" y2="18.9592"/><line class="a" x1="30.5165" y1="4.5" x2="27.5922" y2="9.4032"/><line class="a" x1="34.7406" y1="21.6849" x2="27.9171" y2="18.9592"/><path class="a" d="M29.0544,24.9161c-.5827,1.4721-1.1508,2.54-2.5273,2.54-1.074,0-1.666-.4976-2.5271-1.8363-.8611,1.3387-1.4531,1.8363-2.5271,1.8363-1.3765,0-1.9446-1.0682-2.5273-2.54"/><path class="a" d="M25.9676,35.9613v2.033s8.6917.2889,8.6917,5.5057H13.3407c0-5.2168,8.6917-5.5057,8.6917-5.5057v-2.033"/></svg>
+                        
+                    </a>
+                </li>
+            
+        </ol><ol class="menu" id="main-menu">
+        
+        
+        
+        <li >
+            <a href='/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-home" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <polyline points="5 12 3 12 12 3 21 12 19 12" />
+  <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7" />
+  <path d="M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6" />
+</svg>
+
+
+
+                
+                <span>主页</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/%E5%85%B3%E4%BA%8E/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-user" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="7" r="4" />
+  <path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />
+</svg>
+
+
+
+                
+                <span>关于</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/archives/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-archive" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <rect x="3" y="4" width="18" height="4" rx="2" />
+  <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-10" />
+  <line x1="10" y1="12" x2="14" y2="12" />
+</svg>
+
+
+
+                
+                <span>归档</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/search/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-search" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="10" cy="10" r="7" />
+  <line x1="21" y1="21" x2="15" y2="15" />
+</svg>
+
+
+
+                
+                <span>搜索</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/%E5%8F%8B%E6%83%85%E9%93%BE%E6%8E%A5/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-link" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <path d="M10 14a3.5 3.5 0 0 0 5 0l4 -4a3.5 3.5 0 0 0 -5 -5l-.5 .5" />
+  <path d="M14 10a3.5 3.5 0 0 0 -5 0l-4 4a3.5 3.5 0 0 0 5 5l.5 -.5" />
+</svg>
+
+
+
+                
+                <span>友情链接</span>
+            </a>
+        </li>
+        
+        <li class="menu-bottom-section">
+            <ol class="menu">
+                    
+                        <li id="i18n-switch">  
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-language" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M4 5h7" />
+  <path d="M9 3v2c0 4.418 -2.239 8 -5 8" />
+  <path d="M5 9c-.003 2.144 2.952 3.908 6.7 4" />
+  <path d="M12 20l4 -9l4 9" />
+  <path d="M19.1 18h-6.2" />
+</svg>
+
+
+
+                            <select name="language" title="language" onchange="window.location.href = this.selectedOptions[0].value">
+                                
+                                    <option value="http://localhost:1313/en/" >English</option>
+                                
+                                    <option value="http://localhost:1313/" selected>中文</option>
+                                
+                            </select>
+                        </li>
+                    
+                
+
+                
+                    <li id="dark-mode-toggle">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-left" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="8" cy="12" r="2" />
+  <rect x="2" y="6" width="20" height="12" rx="6" />
+</svg>
+
+
+
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-right" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="16" cy="12" r="2" />
+  <rect x="2" y="6" width="20" height="12" rx="6" />
+</svg>
+
+
+
+                        <span>暗色模式</span>
+                    </li>
+                
+            </ol>
+        </li>
+    </ol>
+</aside>
+
+    <aside class="sidebar right-sidebar sticky">
+        
+            
+                
+    <section class="widget archives">
+        <div class="widget-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-hash" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <line x1="5" y1="9" x2="19" y2="9" />
+  <line x1="5" y1="15" x2="19" y2="15" />
+  <line x1="11" y1="4" x2="7" y2="20" />
+  <line x1="17" y1="4" x2="13" y2="20" />
+</svg>
+
+
+
+        </div>
+        <h2 class="widget-title section-title">目录</h2>
+        
+        <div class="widget--toc">
+            <nav id="TableOfContents">
+  <ol>
+    <li><a href="#写入文件">写入文件</a>
+      <ol>
+        <li><a href="#log文件">log文件</a></li>
+        <li><a href="#index文件">index文件</a></li>
+        <li><a href="#timeindex文件">timeindex文件</a></li>
+      </ol>
+    </li>
+    <li><a href="#写入过程">写入过程</a></li>
+  </ol>
+</nav>
+        </div>
+    </section>
+
+            
+        
+    </aside>
+
+
+            <main class="main full-width">
+    <article class="has-image main-article">
+    <header class="article-header">
+        <div class="article-image">
+            <a href="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/">
+                <img src="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/cover_hu_8c175db999ff7687.jpg"
+                        srcset="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/cover_hu_8c175db999ff7687.jpg 800w, /p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/cover_hu_9f29176c143d7a7f.jpg 1600w"
+                        width="800" 
+                        height="450" 
+                        loading="lazy"
+                        alt="Featured image of post kafka数据在服务端是如何写入的" />
+                
+            </a>
+        </div>
+    
+
+    <div class="article-details">
+    
+    <header class="article-category">
+        
+            <a href="/categories/kafka/" >
+                Kafka
+            </a>
+        
+    </header>
+    
+
+    <div class="article-title-wrapper">
+        <h2 class="article-title">
+            <a href="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/">kafka数据在服务端是如何写入的</a>
+        </h2>
+    
+        
+    </div>
+
+    
+    
+    
+    
+    <footer class="article-time">
+        
+            <div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-calendar-time" width="56" height="56" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <path d="M11.795 21h-6.795a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v4" />
+  <circle cx="18" cy="18" r="4" />
+  <path d="M15 3v4" />
+  <path d="M7 3v4" />
+  <path d="M3 11h16" />
+  <path d="M18 16.496v1.504l1 1" />
+</svg>
+                <time class="article-time--published">2024-11-28</time>
+            </div>
+        
+
+        
+            <div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-clock" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <polyline points="12 7 12 12 15 15" />
+</svg>
+
+
+
+                
+                <time class="article-time--reading">
+                    
+                    17min
+                </time>
+            </div>
+        
+    </footer>
+    
+
+    
+</div>
+
+</header>
+
+    <section class="article-content">
+    
+    
+    <h1 id="学习背景">学习背景
+</h1><p>接着上篇，我们来聊聊kafka数据在服务端怎么写入的</p>
+<h1 id="服务端写入">服务端写入
+</h1><p>在介绍服务端的写流程之前，我们先要理解服务端的几个角色之间的关系。</p>
+<p>假设我们有一个由3个broker组成的kafka集群，我们在这个集群上创建一个topic叫做shitu-topic，他有10个分区，每个分区有3个副本。那么partition和broker的关系假设如下。</p>
+<p><img src="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/kafka-partition%E5%85%B3%E7%B3%BB.jpg"
+	width="2216"
+	height="954"
+	srcset="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/kafka-partition%E5%85%B3%E7%B3%BB_hu_482b16b46cbbd22e.jpg 480w, /p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/kafka-partition%E5%85%B3%E7%B3%BB_hu_2d395a6ec032a5ab.jpg 1024w"
+	loading="lazy"
+	
+		alt="kafka-partition关系"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="232"
+		data-flex-basis="557px"
+	
+></p>
+<p>因为每个partition有3个副本，所以每个partition的副本都会均匀的分布在这三台机器上，我们取shitu-topic-0的副本来观察。</p>
+<p>在三个broker上，每个broker的log存储目录都有一个shitu-topic-0目录，我们可以成为shitu-topic-0分区，但是同一个时间，只有broker-0上的leader副本对外提供服务，broker-1和broker-2需要去到broker-0上同步消息。在shitu-topic-0目录下就是存储的实际的日志文件。日志文件里包含三个主要的文件内容.log文件存储实际的消息,.index文件存储索引,.timeindex文件存储时间索引。我们把这三个文件合称为一个logsegment日志段，每个log文件只要超过1G就会产生一个新的段文件。日志段文件的命名是以当前段内第一条消息的offset来命名的，这里因为是新创建的topic，第一条消息是0，所以都是0。因为消息是顺序写入的，所以只有最后一个日志段是激活的我们称为active segemnt，活跃段。比如这里活跃段就是00000000000020123000开头的段。</p>
+<p><img src="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/kafka-leader-flower%E5%85%B3%E7%B3%BB.jpg"
+	width="2728"
+	height="1356"
+	srcset="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/kafka-leader-flower%E5%85%B3%E7%B3%BB_hu_298fecb5c2c4f897.jpg 480w, /p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/kafka-leader-flower%E5%85%B3%E7%B3%BB_hu_2d367567c9856fd4.jpg 1024w"
+	loading="lazy"
+	
+		alt="kafka leader-flower关系"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="201"
+		data-flex-basis="482px"
+	
+></p>
+<p>研究消息的写入，就是研究这些文件时怎么产生的，让我们来看一下段文件里每个文件的组织格式。</p>
+<h2 id="写入文件">写入文件
+</h2><h3 id="log文件">log文件
+</h3><p>.log文件存储实际的写入日志，也就是实际的数据存储位置。kafka的log文件存储格式经过了3次变化，目前使用的日志格式称为V2版本，我们取这个版本的日志格式来做讲解。</p>
+<p><img src="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/log%E6%96%87%E4%BB%B6%E6%A0%BC%E5%BC%8F.jpg"
+	width="4196"
+	height="1555"
+	srcset="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/log%E6%96%87%E4%BB%B6%E6%A0%BC%E5%BC%8F_hu_287a8d0cb76e26b9.jpg 480w, /p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/log%E6%96%87%E4%BB%B6%E6%A0%BC%E5%BC%8F_hu_672aa08e9e9f8128.jpg 1024w"
+	loading="lazy"
+	
+		alt="log文件格式"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="269"
+		data-flex-basis="647px"
+	
+></p>
+<p>上图左侧显示的是log文件的格式，我们把log文件内存储的的消息集合称为record batch,而每条消息我们称为一条record，每条record的格式如右边所示。record batch内的字段主要记录的整个log文件的全局属性，比如log文件的起始偏移量，文件长度，epoch，时间戳等等，不做详细解释，也不是重点。</p>
+<p>我们说一下每条消息的格式，我们知道每条消息除了实际的消息内容value外，伴随着每条消息的产生，还会产生这条消息的额外附带的信息，比如消息的偏移量，offsset，时间戳timestamp等等。kafka在设计消息的存储时花了很大的心思。</p>
+<p>这里我解释一下varint，varlong类型，简单的说，就是可变长的类型。比如一条消息的偏移量是int存储容量是4字节，比如存储10这个偏移量，虽然前面大部分是0，但是实际存储还是需要4字节。而varint则可以根据数据的范围选择合适的存储，比如还是10，那么实际记录这个值1个字节就够了。这样，当写入消息时，比如写入2条消息，偏移量分别是10和11，如果分别存储这两个偏移量，需要</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="cl">2 * 4B = 8b
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>而如果使用varint存储，则只需要</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="cl">2 * 1B + 4B(基础偏移量) = 6B
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这里如果不是2条消息，而是10000条消息，那么这个优化就会非常有用。kafka这么做是为了尽最大的可能使用存储空间。当然除了数据格式上的优化，kafka还对数据进行了压缩，也就是records是可以配置不同的压缩算法进行压缩的，比如ZIP。</p>
+<h3 id="index文件">index文件
+</h3><p>.index记录偏移量到实际消息的映射关系。一个很简单的述求，我们想知道某个偏移量的日志的内容，那么我们就需要一种能根据偏移量定位到消息的格式。</p>
+<p>index文件的格式由相对偏移量realtive offset和物理偏移量position组成。当一条消息写入时，根据消息的偏移量计算出这条消息的相对偏移量，比如写入的是20123025这条消息，那么用20123025-20123000 = 25得到相对偏移量25，再记录下这消息的起始物理地址1024，即可组成对这条消息的索引。需要·注意的是，这里的索引是稀疏索引，也就是不是每条消息都会产生索引，而是每隔一些消息产生索引，这样能减少索引的文件大小。</p>
+<p>每一条索引的需要4B的相对偏偏移量和4B的物理地址偏移量，一共8B，kafka的服务端在设置index文件最大大小时要求index文件必须是索引项的整数倍，如果不是，则会自动转换成最接近的整数倍的数字。</p>
+<p><img src="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/index%E6%96%87%E4%BB%B6.jpg"
+	width="2662"
+	height="1044"
+	srcset="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/index%E6%96%87%E4%BB%B6_hu_495b7374040ed645.jpg 480w, /p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/index%E6%96%87%E4%BB%B6_hu_b87ce4338848f9a1.jpg 1024w"
+	loading="lazy"
+	
+		alt="index文件"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="254"
+		data-flex-basis="611px"
+	
+></p>
+<p>大家这里肯定很好奇那么怎么利用相对偏移量来查找消息，我们解释一下，其实对消息的查找可以概述为根据二分法查找。比如想要查找20123050这条偏移量的消息，先根据这个偏移量，去到我们当前副本的segement集合中根据segement的起始偏移量找到对应的segement，所有的segement的信息是根据相对偏移量以跳表的形式记录的。找到的对应的segement后先计算出相对偏移量20123050-20123000 = 50,然后根据50这个相对偏移量，我们去到相对偏量数组里，使用二分查找找到[20,75]这个相对偏移量范围，那么我们可以在log文件里从1024字节开始，逐条消息的解析，并计算出消息的偏移量是不是50，直到2147字节这个结束的位置为止。如果能找到，说明消息在本partition内，不能我们再换另外的partition查找。</p>
+<h3 id="timeindex文件">timeindex文件
+</h3><p>timeidnex记录时间戳到实际消息的映射关系，我们介绍了index文件的格式，再来理解timeindex文件的格式就容易多了。timeindex文件和index文件的格式类似，由时间戳相对偏移量和消息相对偏移量组成。时间戳相对偏移量根据消息的写入时间来计算，比如写入时间是1733001000，用这个写入的时间减去timeindex文件的起始时间1733000000得到1000这个相对时间戳偏移量。</p>
+<p><img src="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/timeindex%E6%96%87%E4%BB%B6.jpg"
+	width="3010"
+	height="1044"
+	srcset="/p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/timeindex%E6%96%87%E4%BB%B6_hu_c7f0cdfc5bfdf14f.jpg 480w, /p/kafka%E6%95%B0%E6%8D%AE%E5%9C%A8%E6%9C%8D%E5%8A%A1%E7%AB%AF%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E7%9A%84/index.assets/timeindex%E6%96%87%E4%BB%B6_hu_67cb9bcacf736f63.jpg 1024w"
+	loading="lazy"
+	
+		alt="timeindex文件"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="288"
+		data-flex-basis="691px"
+	
+></p>
+<p>timeindex文件的查找我们就不说了，大家可以参考index文件。需要注意一点timeindex文件的时间戳是可以设置的，虽然一般kafka服务端会采取自动设置消息写入时间的配置，即log.message.timestamp.type=LogAppendTime，这种情况下因为时间戳由服务器端设置，能够保证时间戳递增。但是如果服务端设置的是CreateTime，并且producer自己设置了消息的生产时间，那么有可能造成timeIndex的写入失败，因为timeindex要求写入的时间必须是递增的。如果不递增，则拒绝本次写入。还有就是，timeindex文件和index文件虽然都是索引，但是他们并不是每条索引项一一对应的，大家从图中也能看出来。</p>
+<p>根据timeindex查找对应消息的过程也和index文件的查找类似，不过因为timeindex本身是根据时间戳来查找，所以会有一步先查找每个timeindex文件的最大时间戳，直到找到一个大于查找时间并且最接近查找时间的timeindex文件。这里有点绕，举个例子，第一个timeindex文件的最大时间戳10000，第二个timeindex文件最大时间戳23000,第三个timeindex文件最大时间戳50000，要查找时间戳为15000的消息，那么因为timeindex文件的时间戳是顺序递增的，很明显，第三个文件的消息都是在15000之后产生的，第一个文件的消息都是在15000之前产生的，那么理所应当的，正好拥有大于15000的时间戳23000的第二个文件理论上应该包含15000这个时间戳写入的消息，所以找到第二个文件。找到对应的文件后再去到到对应的这个timeindex文件根据时间偏移量索引找到这个对应的消息(找不到就换partition)。</p>
+<h2 id="写入过程">写入过程
+</h2><p>介绍完毕实际的文件内容，我们再来归纳一下数据的写入过程。这里不会介绍副本之间的同步的问题，只介绍在leader副本上数据的写入。</p>
+<p>当消息通过client发送到broker上时，broker根据消息的topic找到这个topic的leadder副本。leadter副本根据消息的信息计算出消息归属的parititon。找到parititon后根据偏移量设置计算出消息的偏移量和时间戳，再找到对应的active segement，在index文件中追加消息，并根据需要决定是否写入index文件和timeindex文件。</p>
+
+</section>
+
+
+    <footer class="article-footer">
+    
+    <section class="article-tags">
+        
+            <a href="/tags/kafka/">Kafka</a>
+        
+            <a href="/tags/broker/">Broker</a>
+        
+    </section>
+
+
+    
+    <section class="article-copyright">
+        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-copyright" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <path d="M14.5 9a3.5 4 0 1 0 0 6" />
+</svg>
+
+
+
+        <span>Licensed under CC BY-NC-SA 4.0</span>
+    </section>
+    </footer>
+
+
+    
+</article>
+
+    
+
+    
+
+<aside class="related-content--wrapper">
+    <h2 class="section-title">相关文章</h2>
+    <div class="related-content">
+        <div class="flex article-list--tile">
+            
+                
+<article class="has-image">
+    <a href="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/">
+        
+        
+            <div class="article-image">
+                <img src="/p/kafka%E6%98%AF%E5%A6%82%E4%BD%95%E5%86%99%E5%85%A5%E6%B6%88%E6%81%AF%E7%9A%84/index.assets/cover.22e0e48450f58bc7d1585bbbd2c1ca58_hu_4c79e09795055537.jpg" 
+                        width="250" 
+                        height="150" 
+                        loading="lazy"
+                        alt="Featured image of post kafka是如何写入消息的"
+                        
+                        data-hash="md5-IuDkhFD1i8fRWFu70sHKWA==">
+                
+            </div>
+        
+
+        <div class="article-details">
+            <h2 class="article-title">kafka是如何写入消息的</h2>
+        </div>
+    </a>
+</article>
+
+            
+        </div>
+    </div>
+</aside>
+
+     
+    
+        
+    
+
+    <footer class="site-footer">
+    <section class="copyright">
+        &copy; 
+        
+        2025 javashitu
+    </section>
+    
+    <section class="powerby">
+        使用 <a href="https://gohugo.io/" target="_blank" rel="noopener">Hugo</a> 构建 <br />
+        主题 <b><a href="https://github.com/CaiJimmy/hugo-theme-stack" target="_blank" rel="noopener" data-version="3.30.0">Stack</a></b> 由 <a href="https://jimmycai.com" target="_blank" rel="noopener">Jimmy</a> 设计
+    </section>
+</footer>
+
+
+    
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+    
+    <div class="pswp__bg"></div>
+
+    
+    <div class="pswp__scroll-wrap">
+
+        
+        <div class="pswp__container">
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+        </div>
+
+        
+        <div class="pswp__ui pswp__ui--hidden">
+
+            <div class="pswp__top-bar">
+
+                
+
+                <div class="pswp__counter"></div>
+
+                <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+
+                <button class="pswp__button pswp__button--share" title="Share"></button>
+
+                <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+
+                <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+
+                
+                
+                <div class="pswp__preloader">
+                    <div class="pswp__preloader__icn">
+                        <div class="pswp__preloader__cut">
+                            <div class="pswp__preloader__donut"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+                <div class="pswp__share-tooltip"></div>
+            </div>
+
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+            </button>
+
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+            </button>
+
+            <div class="pswp__caption">
+                <div class="pswp__caption__center"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div><script 
+                src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"integrity="sha256-ePwmChbbvXbsO02lbM3HoHbSHTHFAeChekF1xKJdleo="crossorigin="anonymous"
+                defer
+                >
+            </script><script 
+                src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"integrity="sha256-UKkzOn/w1mBxRmLLGrSeyB4e1xbrp4xylgAWb3M42pU="crossorigin="anonymous"
+                defer
+                >
+            </script><link 
+                rel="stylesheet" 
+                href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"crossorigin="anonymous"
+            ><link 
+                rel="stylesheet" 
+                href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"crossorigin="anonymous"
+            >
+
+            </main>
+        </div>
+        <script 
+                src="https://cdn.jsdelivr.net/npm/node-vibrant@3.1.6/dist/vibrant.min.js"integrity="sha256-awcR2jno4kI5X0zL8ex0vi2z&#43;KMkF24hUW8WePSA9HM="crossorigin="anonymous"
+                
+                >
+            </script><script type="text/javascript" src="/ts/main.4c637ef32fb19f6d91a76f6f1f78e08f50dc0096fc75afe065dfd9b68bccd6c0.js" defer></script>
+<script>
+    (function () {
+        const customFont = document.createElement('link');
+        customFont.href = "https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap";
+
+        customFont.type = "text/css";
+        customFont.rel = "stylesheet";
+
+        document.head.appendChild(customFont);
+    }());
+</script>
+
+    </body>
+</html>
