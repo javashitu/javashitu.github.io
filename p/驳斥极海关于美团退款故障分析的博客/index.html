@@ -1,0 +1,1757 @@
+<!DOCTYPE html>
+<html lang="zh-cn" dir="ltr">
+    <head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'><meta name='description' content="背景 今天刷B站，偶然刷到了关于极海的《全网独家！关于美团退款故障公关文技术解读！》视频，发现里面关于程序设计的点大部分都是胡扯，而且夹带了很多私货，于是想发个视频回怼一下。\n正文 发文前，我也先叠个甲，以下的分析是我根据我在美团和阿里的工作经验分析出来，如果有经验更丰富的朋友欢迎指正\n因为极海的视频是针对每个美团官方的5种原因分别解读，下面我也针对极海的5种解读分别指正他的谬论\n解读一 ">
+<title>驳斥极海关于美团退款故障分析的博客</title>
+
+<link rel='canonical' href='http://localhost:1313/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/'>
+
+<link rel="stylesheet" href="/scss/style.min.946cca6c6259ef94ac55abfae7c7bf3291ea3ed5eea17ef77500b257217c6710.css"><meta property='og:title' content="驳斥极海关于美团退款故障分析的博客">
+<meta property='og:description' content="背景 今天刷B站，偶然刷到了关于极海的《全网独家！关于美团退款故障公关文技术解读！》视频，发现里面关于程序设计的点大部分都是胡扯，而且夹带了很多私货，于是想发个视频回怼一下。\n正文 发文前，我也先叠个甲，以下的分析是我根据我在美团和阿里的工作经验分析出来，如果有经验更丰富的朋友欢迎指正\n因为极海的视频是针对每个美团官方的5种原因分别解读，下面我也针对极海的5种解读分别指正他的谬论\n解读一 ">
+<meta property='og:url' content='http://localhost:1313/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/'>
+<meta property='og:site_name' content='javashitu'>
+<meta property='og:type' content='article'><meta property='article:section' content='Post' /><meta property='article:tag' content='杂谈' /><meta property='article:published_time' content='2025-09-01T00:00:00&#43;00:00'/><meta property='article:modified_time' content='2025-09-01T00:00:00&#43;00:00'/><meta property='og:image' content='http://localhost:1313/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/cover.jpg' />
+<meta name="twitter:title" content="驳斥极海关于美团退款故障分析的博客">
+<meta name="twitter:description" content="背景 今天刷B站，偶然刷到了关于极海的《全网独家！关于美团退款故障公关文技术解读！》视频，发现里面关于程序设计的点大部分都是胡扯，而且夹带了很多私货，于是想发个视频回怼一下。\n正文 发文前，我也先叠个甲，以下的分析是我根据我在美团和阿里的工作经验分析出来，如果有经验更丰富的朋友欢迎指正\n因为极海的视频是针对每个美团官方的5种原因分别解读，下面我也针对极海的5种解读分别指正他的谬论\n解读一 "><meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content='http://localhost:1313/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/cover.jpg' />
+    </head>
+    <body class="
+    article-page
+    ">
+    <script>
+        (function() {
+            const colorSchemeKey = 'StackColorScheme';
+            if(!localStorage.getItem(colorSchemeKey)){
+                localStorage.setItem(colorSchemeKey, "auto");
+            }
+        })();
+    </script><script>
+    (function() {
+        const colorSchemeKey = 'StackColorScheme';
+        const colorSchemeItem = localStorage.getItem(colorSchemeKey);
+        const supportDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches === true;
+
+        if (colorSchemeItem == 'dark' || colorSchemeItem === 'auto' && supportDarkMode) {
+            
+
+            document.documentElement.dataset.scheme = 'dark';
+        } else {
+            document.documentElement.dataset.scheme = 'light';
+        }
+    })();
+</script>
+<div class="container main-container flex on-phone--column extended"><aside class="sidebar left-sidebar sticky ">
+    <button class="hamburger hamburger--spin" type="button" id="toggle-menu" aria-label="切换菜单">
+        <span class="hamburger-box">
+            <span class="hamburger-inner"></span>
+        </span>
+    </button>
+
+    <header>
+        
+            
+            <figure class="site-avatar">
+                <a href="/">
+                
+                    
+                    
+                    
+                        
+                        <img src="/img/javashitu_hu_4b8114d532ed8b7b.jpg" width="300"
+                            height="300" class="site-logo" loading="lazy" alt="Avatar">
+                    
+                
+                </a>
+                
+            </figure>
+            
+        
+        
+        <div class="site-meta">
+            <h1 class="site-name"><a href="/">javashitu</a></h1>
+            <h2 class="site-description">退笔如山未足珍，读书万卷始通神</h2>
+        </div>
+    </header><ol class="menu-social">
+            
+                <li>
+                    <a 
+                        href='https://github.com/javashitu'
+                        target="_blank"
+                        title="GitHub"
+                        rel="me"
+                    >
+                        
+                        
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-brand-github" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5" />
+</svg>
+
+
+
+                        
+                    </a>
+                </li>
+            
+                <li>
+                    <a 
+                        href='https://space.bilibili.com/1825238836'
+                        target="_blank"
+                        title="Bilibili"
+                        rel="me"
+                    >
+                        
+                        
+                            <?xml version="1.0" encoding="utf-8"?><!-- Uploaded to: SVG Repo, www.svgrepo.com, Generator: SVG Repo Mixer Tools -->
+<svg width="800px" height="800px" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><defs><style>.a{fill:none;stroke:#000000;stroke-linecap:round;stroke-linejoin:round;}</style></defs><rect class="a" x="6.1336" y="9.4032" width="35.7327" height="26.5581" rx="6.7532"/><line class="a" x1="17.4835" y1="4.5" x2="20.4078" y2="9.4032"/><line class="a" x1="13.2594" y1="21.6849" x2="20.0829" y2="18.9592"/><line class="a" x1="30.5165" y1="4.5" x2="27.5922" y2="9.4032"/><line class="a" x1="34.7406" y1="21.6849" x2="27.9171" y2="18.9592"/><path class="a" d="M29.0544,24.9161c-.5827,1.4721-1.1508,2.54-2.5273,2.54-1.074,0-1.666-.4976-2.5271-1.8363-.8611,1.3387-1.4531,1.8363-2.5271,1.8363-1.3765,0-1.9446-1.0682-2.5273-2.54"/><path class="a" d="M25.9676,35.9613v2.033s8.6917.2889,8.6917,5.5057H13.3407c0-5.2168,8.6917-5.5057,8.6917-5.5057v-2.033"/></svg>
+                        
+                    </a>
+                </li>
+            
+        </ol><ol class="menu" id="main-menu">
+        
+        
+        
+        <li >
+            <a href='/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-home" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <polyline points="5 12 3 12 12 3 21 12 19 12" />
+  <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7" />
+  <path d="M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6" />
+</svg>
+
+
+
+                
+                <span>主页</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/%E5%85%B3%E4%BA%8E/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-user" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="7" r="4" />
+  <path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />
+</svg>
+
+
+
+                
+                <span>关于</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/archives/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-archive" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <rect x="3" y="4" width="18" height="4" rx="2" />
+  <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-10" />
+  <line x1="10" y1="12" x2="14" y2="12" />
+</svg>
+
+
+
+                
+                <span>归档</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/search/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-search" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="10" cy="10" r="7" />
+  <line x1="21" y1="21" x2="15" y2="15" />
+</svg>
+
+
+
+                
+                <span>搜索</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/%E5%8F%8B%E6%83%85%E9%93%BE%E6%8E%A5/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-link" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <path d="M10 14a3.5 3.5 0 0 0 5 0l4 -4a3.5 3.5 0 0 0 -5 -5l-.5 .5" />
+  <path d="M14 10a3.5 3.5 0 0 0 -5 0l-4 4a3.5 3.5 0 0 0 5 5l.5 -.5" />
+</svg>
+
+
+
+                
+                <span>友情链接</span>
+            </a>
+        </li>
+        
+        <li class="menu-bottom-section">
+            <ol class="menu">
+                    
+                        <li id="i18n-switch">  
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-language" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M4 5h7" />
+  <path d="M9 3v2c0 4.418 -2.239 8 -5 8" />
+  <path d="M5 9c-.003 2.144 2.952 3.908 6.7 4" />
+  <path d="M12 20l4 -9l4 9" />
+  <path d="M19.1 18h-6.2" />
+</svg>
+
+
+
+                            <select name="language" title="language" onchange="window.location.href = this.selectedOptions[0].value">
+                                
+                                    <option value="http://localhost:1313/en/" >English</option>
+                                
+                                    <option value="http://localhost:1313/" selected>中文</option>
+                                
+                            </select>
+                        </li>
+                    
+                
+
+                
+                    <li id="dark-mode-toggle">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-left" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="8" cy="12" r="2" />
+  <rect x="2" y="6" width="20" height="12" rx="6" />
+</svg>
+
+
+
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-right" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="16" cy="12" r="2" />
+  <rect x="2" y="6" width="20" height="12" rx="6" />
+</svg>
+
+
+
+                        <span>暗色模式</span>
+                    </li>
+                
+            </ol>
+        </li>
+    </ol>
+</aside>
+
+    <aside class="sidebar right-sidebar sticky">
+        
+            
+                
+    <section class="widget archives">
+        <div class="widget-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-hash" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <line x1="5" y1="9" x2="19" y2="9" />
+  <line x1="5" y1="15" x2="19" y2="15" />
+  <line x1="11" y1="4" x2="7" y2="20" />
+  <line x1="17" y1="4" x2="13" y2="20" />
+</svg>
+
+
+
+        </div>
+        <h2 class="widget-title section-title">目录</h2>
+        
+        <div class="widget--toc">
+            <nav id="TableOfContents">
+  <ol>
+    <li><a href="#解读一">解读一</a></li>
+    <li><a href="#解读二">解读二</a></li>
+    <li><a href="#解读三">解读三</a></li>
+    <li><a href="#解读四">解读四</a></li>
+    <li><a href="#解读五">解读五</a></li>
+  </ol>
+</nav>
+        </div>
+    </section>
+
+            
+        
+    </aside>
+
+
+            <main class="main full-width">
+    <article class="has-image main-article">
+    <header class="article-header">
+        <div class="article-image">
+            <a href="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/">
+                <img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/cover_hu_ee80868f887edeca.jpg"
+                        srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/cover_hu_ee80868f887edeca.jpg 800w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/cover_hu_61326459a3327476.jpg 1600w"
+                        width="800" 
+                        height="450" 
+                        loading="lazy"
+                        alt="Featured image of post 驳斥极海关于美团退款故障分析的博客" />
+                
+            </a>
+        </div>
+    
+
+    <div class="article-details">
+    
+    <header class="article-category">
+        
+            <a href="/categories/%E6%9D%82%E8%B0%88/" >
+                杂谈
+            </a>
+        
+    </header>
+    
+
+    <div class="article-title-wrapper">
+        <h2 class="article-title">
+            <a href="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/">驳斥极海关于美团退款故障分析的博客</a>
+        </h2>
+    
+        
+    </div>
+
+    
+    
+    
+    
+    <footer class="article-time">
+        
+            <div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-calendar-time" width="56" height="56" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <path d="M11.795 21h-6.795a2 2 0 0 1 -2 -2v-12a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v4" />
+  <circle cx="18" cy="18" r="4" />
+  <path d="M15 3v4" />
+  <path d="M7 3v4" />
+  <path d="M3 11h16" />
+  <path d="M18 16.496v1.504l1 1" />
+</svg>
+                <time class="article-time--published">2025-9-1</time>
+            </div>
+        
+
+        
+            <div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-clock" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <polyline points="12 7 12 12 15 15" />
+</svg>
+
+
+
+                
+                <time class="article-time--reading">
+                    
+                    11min
+                </time>
+            </div>
+        
+    </footer>
+    
+
+    
+</div>
+
+</header>
+
+    <section class="article-content">
+    
+    
+    <h1 id="背景">背景
+</h1><p>今天刷B站，偶然刷到了关于极海的《全网独家！关于美团退款故障公关文技术解读！》视频，发现里面关于程序设计的点大部分都是胡扯，而且夹带了很多私货，于是想发个视频回怼一下。</p>
+<h1 id="正文">正文
+</h1><p>发文前，我也先叠个甲，以下的分析是我根据我在美团和阿里的工作经验分析出来，如果有经验更丰富的朋友欢迎指正</p>
+<p>因为极海的视频是针对每个美团官方的5种原因分别解读，下面我也针对极海的5种解读分别指正他的谬论</p>
+<h2 id="解读一">解读一
+</h2><p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111606103.png"
+	width="1263"
+	height="225"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111606103_hu_95560e159f4ee8b7.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111606103_hu_b2f5ea47d08bde36.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831111606103"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="561"
+		data-flex-basis="1347px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111615435.png"
+	width="1500"
+	height="261"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111615435_hu_d9f0a15c9605794c.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111615435_hu_f3d4dea9f7f9bdd7.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831111615435"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="574"
+		data-flex-basis="1379px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111623543.png"
+	width="1464"
+	height="205"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111623543_hu_3500b3849cce4a1a.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111623543_hu_486578d7cb5da80c.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831111623543"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="714"
+		data-flex-basis="1713px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111632967.png"
+	width="1565"
+	height="210"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111632967_hu_4bed6265b97fbe50.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111632967_hu_2c75f36c4e95e77.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831111632967"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="745"
+		data-flex-basis="1788px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111640986.png"
+	width="1255"
+	height="189"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111640986_hu_8f8e26e165ffc85f.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111640986_hu_eb71859c89b27e70.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831111640986"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="664"
+		data-flex-basis="1593px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111648529.png"
+	width="1120"
+	height="180"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111648529_hu_e044d4ec3ee2fd9b.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111648529_hu_1a59c682323f520.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831111648529"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="622"
+		data-flex-basis="1493px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111708629.png"
+	width="1245"
+	height="239"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111708629_hu_a4a4e2e5f7eb03f2.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111708629_hu_5000ca6626733af9.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831111708629"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="520"
+		data-flex-basis="1250px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111715850.png"
+	width="1563"
+	height="209"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111715850_hu_63cb2b74ea7d2e19.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111715850_hu_58a34d0efc25df5f.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831111715850"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="747"
+		data-flex-basis="1794px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111723742.png"
+	width="1205"
+	height="206"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111723742_hu_9ea97de3432746c7.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111723742_hu_95b63ae76e0bade9.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831111723742"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="584"
+		data-flex-basis="1403px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111730521.png"
+	width="1495"
+	height="210"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111730521_hu_a7105c6ee0117a9b.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111730521_hu_5f17e7019b5d21ad.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831111730521"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="711"
+		data-flex-basis="1708px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111741942.png"
+	width="1526"
+	height="206"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111741942_hu_9a2a483c0c7c41a4.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831111741942_hu_c85b147452ca0532.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831111741942"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="740"
+		data-flex-basis="1777px"
+	
+></p>
+<p>极海认为，这种退款和状态通知一般是做最终一致性，所以一般只会有秒级的延迟。实际上稍微做过系统设计的都能想到，消息推送和业务处理，肯定是完全解耦的，在美团这种大公司里尤其如此。在大厂里，一般的消息推送服务都有对应的平台，任何业务需要使用时只需要去平台上创建自己的消息推送模板和推送参数以及appkey/token即可使用。一个简单的例子,先在推送平台上创建模板</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="err">尊贵的无名客%p</span><span class="mi">1</span><span class="err">,恭喜你在银河大乐透活动中奖%p</span><span class="mi">2</span><span class="err">信用点，请携带您的唯一身份id去%p</span><span class="mi">3</span><span class="err">领奖</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>业务方需要使用时，直接通过请求或者消息调用消息推送平台，比如请求的格式可能是这样的</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span><span class="lnt">2
+</span><span class="lnt">3
+</span><span class="lnt">4
+</span><span class="lnt">5
+</span><span class="lnt">6
+</span><span class="lnt">7
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="nt">&#34;p1&#34;</span><span class="p">:</span><span class="s2">&#34;星核宝宝&#34;</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">    <span class="nt">&#34;p2&#34;</span><span class="p">:</span><span class="s2">&#34;999999&#34;</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">    <span class="nt">&#34;p3&#34;</span><span class="p">:</span><span class="s2">&#34;黑塔空间站展览馆-1层&#34;</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">    <span class="nt">&#34;appkey&#34;</span><span class="p">:</span><span class="s2">&#34;key1&#34;</span>
+</span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>所以在这里说这两者之间有最终一致性完全是胡说。准确的说法是依靠消息的可靠性做事件通知，由下游系统完成消息推送。</p>
+<h2 id="解读二">解读二
+</h2><p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145714636.png"
+	width="1956"
+	height="175"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145714636_hu_d8649eeff406a0ab.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145714636_hu_7b2defb2a8ef7e76.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831145714636"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="1117"
+		data-flex-basis="2682px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145723549.png"
+	width="1385"
+	height="175"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145723549_hu_75f8e4bcef5f54e5.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145723549_hu_d6e576fbba39b3d1.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831145723549"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="791"
+		data-flex-basis="1899px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145731635.png"
+	width="1224"
+	height="156"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145731635_hu_190d8bba8dca4ffe.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145731635_hu_d981bb6578998427.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831145731635"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="784"
+		data-flex-basis="1883px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145747240.png"
+	width="1404"
+	height="164"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145747240_hu_1a2e991d0864bbaa.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145747240_hu_8ad5d89309f8b181.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831145747240"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="856"
+		data-flex-basis="2054px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145757746.png"
+	width="1021"
+	height="155"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145757746_hu_bae012e51963f044.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145757746_hu_d8992165463f3b7c.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831145757746"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="658"
+		data-flex-basis="1580px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145805609.png"
+	width="1430"
+	height="160"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145805609_hu_3ff260edd0b98511.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145805609_hu_7e5cab591d97d0d.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831145805609"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="893"
+		data-flex-basis="2145px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145813542.png"
+	width="1270"
+	height="170"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145813542_hu_9c8ebf2efaabb6b4.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145813542_hu_645e0b8212c7ffef.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831145813542"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="747"
+		data-flex-basis="1792px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145821383.png"
+	width="1250"
+	height="176"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145821383_hu_70645e5d55e9532b.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145821383_hu_8a6214970703c331.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831145821383"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="710"
+		data-flex-basis="1704px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145830289.png"
+	width="1471"
+	height="160"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145830289_hu_e22d1c25923cfc09.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145830289_hu_14891df89d7fcc8b.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831145830289"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="919"
+		data-flex-basis="2206px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145837360.png"
+	width="1180"
+	height="200"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145837360_hu_56ec8a8137971205.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145837360_hu_8968aa23585a36cb.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831145837360"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="590"
+		data-flex-basis="1416px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145843843.png"
+	width="1655"
+	height="165"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145843843_hu_a5b69174538b93b9.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145843843_hu_68197bfd2bbaa33.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831145843843"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="1003"
+		data-flex-basis="2407px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145858353.png"
+	width="1698"
+	height="164"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145858353_hu_2f28db7d6c6ca55.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831145858353_hu_840a7aae07fc5633.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831145858353"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="1035"
+		data-flex-basis="2484px"
+	
+></p>
+<p>极海在这里列举的第二种情况其实就是他后面说的第五种情况。这种情况确实存在，不过他举例子在乱举例子，因为正常没人会注销微信。一般这种业务场景下是用户在退款时原本的银行卡被冻结或者注销(比如遇到诈骗)，但是这种情况很少见，而且一般是在交易时间很长之后才可能会触发，但是本身这种场景确实存在。</p>
+<h2 id="解读三">解读三
+</h2><p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114627637.png"
+	width="1219"
+	height="186"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114627637_hu_418fa0c847437587.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114627637_hu_82931898a6de64e6.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114627637"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="655"
+		data-flex-basis="1572px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114635362.png"
+	width="1409"
+	height="224"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114635362_hu_d6ff0452fb6196e3.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114635362_hu_251bb6b941eb2b2d.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114635362"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="629"
+		data-flex-basis="1509px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114643372.png"
+	width="1260"
+	height="215"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114643372_hu_8083a92888eb964e.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114643372_hu_e763ab290616e12e.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114643372"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="586"
+		data-flex-basis="1406px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114649893.png"
+	width="2045"
+	height="180"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114649893_hu_d3a51cd09e8327a8.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114649893_hu_70ed8e294ca3e3d1.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114649893"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="1136"
+		data-flex-basis="2726px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114700237.png"
+	width="1460"
+	height="200"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114700237_hu_acd50a64bdcfffa3.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114700237_hu_4b8978e73192e990.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114700237"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="730"
+		data-flex-basis="1752px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114708320.png"
+	width="2010"
+	height="175"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114708320_hu_1ac3f943c30f2ea7.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114708320_hu_27ef729d04e4e47b.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114708320"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="1148"
+		data-flex-basis="2756px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114718391.png"
+	width="1540"
+	height="199"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114718391_hu_b6863f494f893a83.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114718391_hu_e66332c60a7d8aa8.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114718391"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="773"
+		data-flex-basis="1857px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114726361.png"
+	width="1856"
+	height="174"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114726361_hu_37c3ad0eca4124c3.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114726361_hu_3e67fbfbd47f885f.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114726361"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="1066"
+		data-flex-basis="2560px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114745420.png"
+	width="1120"
+	height="156"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114745420_hu_e4ad7edcbb5e552b.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114745420_hu_af995763704d199.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114745420"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="717"
+		data-flex-basis="1723px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114751885.png"
+	width="1915"
+	height="175"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114751885_hu_b636f578253119f4.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114751885_hu_8e79cc33904890ee.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114751885"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="1094"
+		data-flex-basis="2626px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114800465.png"
+	width="1056"
+	height="179"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114800465_hu_b0dd0d78da8f466a.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114800465_hu_3248ca2a9f5f139d.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114800465"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="589"
+		data-flex-basis="1415px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114806717.png"
+	width="1756"
+	height="180"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114806717_hu_84a021b4d200f2bf.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114806717_hu_eebcb4e47a47f719.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114806717"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="975"
+		data-flex-basis="2341px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114816941.png"
+	width="1666"
+	height="201"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114816941_hu_9f6cb15347e3a2a5.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114816941_hu_711df202095a5c44.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114816941"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="828"
+		data-flex-basis="1989px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114823295.png"
+	width="1106"
+	height="188"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114823295_hu_a4e8f514454a208.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114823295_hu_76821a91cc006e4.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114823295"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="588"
+		data-flex-basis="1411px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114828923.png"
+	width="1581"
+	height="191"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114828923_hu_f1333c05e05d2f09.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114828923_hu_7d042a179b7daca9.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114828923"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="827"
+		data-flex-basis="1986px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114837310.png"
+	width="1696"
+	height="179"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114837310_hu_ea25fa97512520ed.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114837310_hu_4bbf4618d4a76009.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114837310"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="947"
+		data-flex-basis="2273px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114846641.png"
+	width="1575"
+	height="199"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114846641_hu_b7f76bed3525e0f7.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114846641_hu_dda0ac8a4069010b.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114846641"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="791"
+		data-flex-basis="1899px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114854533.png"
+	width="1345"
+	height="194"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114854533_hu_79475c0beccefc97.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831114854533_hu_5608a65d9c9bacce.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831114854533"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="693"
+		data-flex-basis="1663px"
+	
+></p>
+<p>这个解读里极海其实只说了这么做会有什么问题没解释为什么会产生这种设计，我可以给大家解释一下为什么会有这种设计。一般来说，在一些高频页面，访问的数据会从缓存里获取，一些中低频的页面，数据则主要从DB里获取。比如订单列表页，就是一个典型的高频页面，用户打开APP时会经常查看订单到了哪一个状态，但是相对不会那么频繁的点进去这个订单详细查看订单的详情。订单详情页里的数据则主要是从DB获取，在一些设计里，这种详情页的数据在查询时，甚至会主动的再查询一次缓存，来做缓存的主动更新。当然缓存本身也是存在主动更新的，但这就涉及到数据同步的延迟了，如果使用高频更新数据同步机制，一方面是成本太高，另一个方面就是风险太大。所以这么设计的好处是大部分数据能够准确显示，并且依靠一些事件触发修正保证数据一致性。（在这里讨论最终一致性是没问题的）</p>
+<h2 id="解读四">解读四
+</h2><p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142805663.png"
+	width="2050"
+	height="214"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142805663_hu_e870c600f3bc83af.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142805663_hu_a3910e6cc4c8552d.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831142805663"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="957"
+		data-flex-basis="2299px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142815732.png"
+	width="2054"
+	height="159"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142815732_hu_b99840297f38fef3.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142815732_hu_70612bc45bc1b9b8.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831142815732"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="1291"
+		data-flex-basis="3100px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142825159.png"
+	width="1353"
+	height="199"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142825159_hu_c73d1b1883673de8.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142825159_hu_ccbaf3c2c31f6ec1.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831142825159"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="679"
+		data-flex-basis="1631px"
+	
+></p>
+<p>这一点就没太多好说的了，业务升级导致原本的一些数据被废弃了，当然这种场景也是小范围场景，估计当时业务迁移时评估出来这部分受影响的业务单量很少，所以没有对这里的业务做兼容。不是这次事故，估计大部分人都不知道美团礼品卡这个东西。</p>
+<h2 id="解读五">解读五
+</h2><p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142912283.png"
+	width="1679"
+	height="154"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142912283_hu_701b1c08442ed5c2.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142912283_hu_642e1ecfedcd0613.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831142912283"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="1090"
+		data-flex-basis="2616px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142925183.png"
+	width="1241"
+	height="204"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142925183_hu_9526661867081d03.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142925183_hu_d438f23bd2c92205.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831142925183"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="608"
+		data-flex-basis="1460px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142931951.png"
+	width="1453"
+	height="180"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142931951_hu_d1ad8340a092f2b2.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142931951_hu_c03f09c5eab9032e.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831142931951"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="807"
+		data-flex-basis="1937px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142939815.png"
+	width="1365"
+	height="200"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142939815_hu_7522f3792785bdee.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142939815_hu_7cb968937f67fa07.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831142939815"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="682"
+		data-flex-basis="1638px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142944588.png"
+	width="1524"
+	height="170"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142944588_hu_78dd00e9541381ea.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142944588_hu_4d170ecabf15b81d.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831142944588"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="896"
+		data-flex-basis="2151px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142951615.png"
+	width="2139"
+	height="185"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142951615_hu_8db570ab2c676fd0.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831142951615_hu_62d367f4d5cf5c4f.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831142951615"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="1156"
+		data-flex-basis="2774px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143001619.png"
+	width="1904"
+	height="200"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143001619_hu_a50fc5e2e6e2d79c.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143001619_hu_2c1ea70a22c714d4.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143001619"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="952"
+		data-flex-basis="2284px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143014806.png"
+	width="1321"
+	height="175"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143014806_hu_7018672726be1a09.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143014806_hu_96fc6ba12f12890.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143014806"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="754"
+		data-flex-basis="1811px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143110046.png"
+	width="1651"
+	height="215"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143110046_hu_43a5dac974adbf9d.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143110046_hu_42f4478e6c712396.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143110046"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="767"
+		data-flex-basis="1842px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143052218.png"
+	width="1820"
+	height="200"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143052218_hu_ebf20eced5144c28.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143052218_hu_2a7f3a2f25bba8e3.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143052218"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="910"
+		data-flex-basis="2184px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143119345.png"
+	width="1420"
+	height="196"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143119345_hu_7e17cba6e9e239ec.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143119345_hu_9db1b1aa6c9b631.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143119345"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="724"
+		data-flex-basis="1738px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143127284.png"
+	width="1664"
+	height="205"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143127284_hu_a1c5ca3aaed13ad2.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143127284_hu_c0361c5fb87e4a3b.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143127284"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="811"
+		data-flex-basis="1948px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143134802.png"
+	width="1711"
+	height="181"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143134802_hu_68abc18ed6130f0e.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143134802_hu_c0208f2063ca2cfb.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143134802"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="945"
+		data-flex-basis="2268px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143145017.png"
+	width="1219"
+	height="188"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143145017_hu_843915add0eb7c82.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143145017_hu_b763955f33d23562.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143145017"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="648"
+		data-flex-basis="1556px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143153434.png"
+	width="1645"
+	height="205"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143153434_hu_b4c6e1cd4757a32b.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143153434_hu_44db2bbed2ed7cc2.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143153434"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="802"
+		data-flex-basis="1925px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143200332.png"
+	width="1133"
+	height="190"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143200332_hu_b9127778104ad978.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143200332_hu_bd9c016ea5586a57.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143200332"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="596"
+		data-flex-basis="1431px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143207484.png"
+	width="1710"
+	height="184"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143207484_hu_9dd3c5d61e481d76.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143207484_hu_812698b84ed80164.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143207484"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="929"
+		data-flex-basis="2230px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143215111.png"
+	width="1065"
+	height="149"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143215111_hu_4b784956ecd242ba.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143215111_hu_d755aaa45f202b44.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143215111"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="714"
+		data-flex-basis="1715px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143221821.png"
+	width="1205"
+	height="170"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143221821_hu_893b96e2f963c570.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143221821_hu_aacf1bf7706faa36.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143221821"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="708"
+		data-flex-basis="1701px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143228519.png"
+	width="1545"
+	height="195"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143228519_hu_c1f008a60e954a3d.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143228519_hu_b0c9f3ad7f232401.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143228519"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="792"
+		data-flex-basis="1901px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143236273.png"
+	width="1434"
+	height="200"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143236273_hu_fc023b0a8b84f168.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143236273_hu_c3415f16c8a67ce5.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143236273"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="717"
+		data-flex-basis="1720px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143244178.png"
+	width="2135"
+	height="174"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143244178_hu_71b262c775a9882e.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143244178_hu_17c1c51d5ea24151.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143244178"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="1227"
+		data-flex-basis="2944px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143253469.png"
+	width="1670"
+	height="175"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143253469_hu_f8bf55a5f7aa14e2.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143253469_hu_4e3c6fc743e7da5f.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143253469"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="954"
+		data-flex-basis="2290px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143301930.png"
+	width="1609"
+	height="204"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143301930_hu_76b38ac929e3f5cb.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143301930_hu_25b9d5a9ac60ba0.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143301930"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="788"
+		data-flex-basis="1892px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143320336.png"
+	width="1304"
+	height="176"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143320336_hu_2aea83c4b7a29a11.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143320336_hu_dd6cec0a9bd6d9ec.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143320336"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="740"
+		data-flex-basis="1778px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143326522.png"
+	width="1174"
+	height="148"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143326522_hu_94748ff4cfe8e003.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143326522_hu_e123ce93a9324f4f.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143326522"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="793"
+		data-flex-basis="1903px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143332464.png"
+	width="1290"
+	height="190"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143332464_hu_f2b906d0b261ec1.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143332464_hu_2b1127d7f07082c0.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143332464"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="678"
+		data-flex-basis="1629px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143340963.png"
+	width="1335"
+	height="190"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143340963_hu_51f9a1a677cf6cd5.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143340963_hu_6d4e2098bcb31180.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143340963"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="702"
+		data-flex-basis="1686px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143347729.png"
+	width="1280"
+	height="150"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143347729_hu_a152b6850e957942.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143347729_hu_308d7c38690bfe00.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143347729"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="853"
+		data-flex-basis="2048px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143355529.png"
+	width="1203"
+	height="180"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143355529_hu_7271eeeafaaf2ba3.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143355529_hu_d1a69cb213f9372a.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143355529"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="668"
+		data-flex-basis="1604px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143402213.png"
+	width="1318"
+	height="181"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143402213_hu_43d2342a20ef3298.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143402213_hu_7bb9e7e8957b6505.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143402213"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="728"
+		data-flex-basis="1747px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143408714.png"
+	width="1564"
+	height="164"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143408714_hu_20365abe2dd41e30.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143408714_hu_941ea2ba5d92f88e.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143408714"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="953"
+		data-flex-basis="2288px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143415904.png"
+	width="1465"
+	height="190"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143415904_hu_f6104f8c99024463.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143415904_hu_2ef97ff52643af43.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143415904"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="771"
+		data-flex-basis="1850px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143423898.png"
+	width="1240"
+	height="170"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143423898_hu_44a8a931fb61859e.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143423898_hu_3239400472f55e03.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143423898"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="729"
+		data-flex-basis="1750px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143430108.png"
+	width="1916"
+	height="201"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143430108_hu_6c2f9e18d24128bc.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143430108_hu_342a9916485b04cb.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143430108"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="953"
+		data-flex-basis="2287px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143440920.png"
+	width="1246"
+	height="165"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143440920_hu_571a9d95b395a830.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143440920_hu_5270175e3dbaf81a.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143440920"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="755"
+		data-flex-basis="1812px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143449745.png"
+	width="1345"
+	height="183"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143449745_hu_138c83a71d814688.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143449745_hu_aed116335e28747.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143449745"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="734"
+		data-flex-basis="1763px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143458292.png"
+	width="1309"
+	height="194"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143458292_hu_ce0ab1090ea133b4.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143458292_hu_9d30ce7a5203e129.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143458292"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="674"
+		data-flex-basis="1619px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143506186.png"
+	width="1460"
+	height="159"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143506186_hu_727f60a6942fc124.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143506186_hu_2d8880648ecd06c2.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143506186"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="918"
+		data-flex-basis="2203px"
+	
+></p>
+<p><img src="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143513825.png"
+	width="1301"
+	height="184"
+	srcset="/p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143513825_hu_7e9b97b4007de55a.png 480w, /p/%E9%A9%B3%E6%96%A5%E6%9E%81%E6%B5%B7%E5%85%B3%E4%BA%8E%E7%BE%8E%E5%9B%A2%E9%80%80%E6%AC%BE%E6%95%85%E9%9A%9C%E5%88%86%E6%9E%90%E7%9A%84%E5%8D%9A%E5%AE%A2/index.assets/image-20250831143513825_hu_7bc169fe41da6295.png 1024w"
+	loading="lazy"
+	
+		alt="image-20250831143513825"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="707"
+		data-flex-basis="1696px"
+	
+></p>
+<p>解读五其实就是解读二的复读了，没有任何新意。但关键点是极海在这里夹带私货，一直在暗示美团有意坑这笔钱。那么我这么问，你把钱转到微信余额里，把原先赚钱的银行卡注销掉，然后把微信注销掉，微信会想办法联系你把钱退给你吗？尤其是在钱款的数量不大的情况下，几乎不可能。这种情况在各大平台上几乎都存在。让我无法接受的是极海举的例子，退款时网络不稳定，超时，导致退款失败。这完全就是在偷换概念的抹黑了，任何开发的都会考虑一个请求或者消息超时了会怎样。这种功能程序结构上的问题和通知里所说的渠道问题完全是两类不一样的问题。在这种例子下其实就是在暗示任何的网络问题都可能导致退款失败。</p>
+<p>这种偷换概念去恶意抹黑的行为出现在技术博主(虽然他技术不怎么样)的视频里，实在不应该。</p>
+
+</section>
+
+
+    <footer class="article-footer">
+    
+    <section class="article-tags">
+        
+            <a href="/tags/%E6%9D%82%E8%B0%88/">杂谈</a>
+        
+    </section>
+
+
+    
+    <section class="article-copyright">
+        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-copyright" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <path d="M14.5 9a3.5 4 0 1 0 0 6" />
+</svg>
+
+
+
+        <span>Licensed under CC BY-NC-SA 4.0</span>
+    </section>
+    </footer>
+
+
+    
+</article>
+
+    
+
+    
+
+     
+    
+        
+    
+
+    <footer class="site-footer">
+    <section class="copyright">
+        &copy; 
+        
+        2025 javashitu
+    </section>
+    
+    <section class="powerby">
+        使用 <a href="https://gohugo.io/" target="_blank" rel="noopener">Hugo</a> 构建 <br />
+        主题 <b><a href="https://github.com/CaiJimmy/hugo-theme-stack" target="_blank" rel="noopener" data-version="3.30.0">Stack</a></b> 由 <a href="https://jimmycai.com" target="_blank" rel="noopener">Jimmy</a> 设计
+    </section>
+</footer>
+
+
+    
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+    
+    <div class="pswp__bg"></div>
+
+    
+    <div class="pswp__scroll-wrap">
+
+        
+        <div class="pswp__container">
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+        </div>
+
+        
+        <div class="pswp__ui pswp__ui--hidden">
+
+            <div class="pswp__top-bar">
+
+                
+
+                <div class="pswp__counter"></div>
+
+                <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+
+                <button class="pswp__button pswp__button--share" title="Share"></button>
+
+                <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+
+                <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+
+                
+                
+                <div class="pswp__preloader">
+                    <div class="pswp__preloader__icn">
+                        <div class="pswp__preloader__cut">
+                            <div class="pswp__preloader__donut"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+                <div class="pswp__share-tooltip"></div>
+            </div>
+
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+            </button>
+
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+            </button>
+
+            <div class="pswp__caption">
+                <div class="pswp__caption__center"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div><script 
+                src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"integrity="sha256-ePwmChbbvXbsO02lbM3HoHbSHTHFAeChekF1xKJdleo="crossorigin="anonymous"
+                defer
+                >
+            </script><script 
+                src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"integrity="sha256-UKkzOn/w1mBxRmLLGrSeyB4e1xbrp4xylgAWb3M42pU="crossorigin="anonymous"
+                defer
+                >
+            </script><link 
+                rel="stylesheet" 
+                href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"crossorigin="anonymous"
+            ><link 
+                rel="stylesheet" 
+                href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"crossorigin="anonymous"
+            >
+
+            </main>
+        </div>
+        <script 
+                src="https://cdn.jsdelivr.net/npm/node-vibrant@3.1.6/dist/vibrant.min.js"integrity="sha256-awcR2jno4kI5X0zL8ex0vi2z&#43;KMkF24hUW8WePSA9HM="crossorigin="anonymous"
+                
+                >
+            </script><script type="text/javascript" src="/ts/main.4c637ef32fb19f6d91a76f6f1f78e08f50dc0096fc75afe065dfd9b68bccd6c0.js" defer></script>
+<script>
+    (function () {
+        const customFont = document.createElement('link');
+        customFont.href = "https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap";
+
+        customFont.type = "text/css";
+        customFont.rel = "stylesheet";
+
+        document.head.appendChild(customFont);
+    }());
+</script>
+
+    </body>
+</html>
