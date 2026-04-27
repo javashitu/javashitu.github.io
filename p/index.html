@@ -1,0 +1,1217 @@
+<!DOCTYPE html>
+<html lang="zh-cn" dir="ltr">
+    <head><script src="/livereload.js?mindelay=10&amp;v=2&amp;port=1313&amp;path=livereload" data-no-instant defer></script><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'><meta name='description' content="date = &ldquo;2026-04-27&rdquo; draft = false title = &ldquo;diy_llm第二三章笔记&rdquo; reading_time = 30 tags=[ &ldquo;AI&rdquo;, &ldquo;LLM&rdquo; ] categories = [ &ldquo;LLM&rdquo; ] series=[&ldquo;A计划-LLM篇&rdquo;] image=&ldquo;index.assets/cover.jpg&rdquo;\n+++\n文章背景 最近在学CSS336，但是奈何本人水平有限，加上视频里的内容确实太跳跃，看起来太难以投入，所以决定找个别的LLM项目来学一下。所以找到这个项目，本篇文章是笔记，文本排版格式会有一些糙，但胜在全面详细，感兴趣的话可以阅读一二。\ndiy_llm chapter2 分词器 一般在语料中存在身份证，电话号码等信息都需要脱敏，因为这些语料是高基数且不重复的容易产生大量的低价值token片段。这会影响模型学习语言的规律。但是如果需要模型学习里识别里面的特定实体，那么则相反，这些语料就需要保留。还有就是在多语言或者混合语料中，应该考虑要准备对低资源语料做采样或者保留，否则可能因为高频语料主导模型导致模型的语言性能。\n预分词是指将原始文本切分成可以统计，合并的基础单元，比如字符，字节或者Unicod片段，常见的分词手段有按照空格，自字符，Unicode类别，甚至字节划分。\n按照标间符号，空格拆分 按照unicode类别拆分，比如按照数字，标点，中文，特殊字符拆分token，这样不同的unicode会归属到不同的token块。这种方法适合多语言混合的文本。 字节级拆分，完全不依赖语言，字符，种类，按照字节序列得到单个token 前两种策略在处理长缺乏显示分隔符合长段同类型文本时，可能会退化成字符级切分，但是第三种不会。因此UTF-8策略具备最强通用性，能减少未登录词(OOV)的出现。对于以空格为词边界的语言，可以按照正则等边界拆分，但是对于中文，则一般按照字符拆分。预分词最大的好处就是提升TOKEN利用率，减少未登录词的情况。\n预分词的目的是为了实现高效的模型输入，因为基于词组的原始的词表可能有几万个，但是基于字节的词表只有265个，这样输入的维度就变得更小，更方便模型预测接一个字符后的字符，比如e5a5bd 表示好，模型发现这三个字节经常在一起出现，那么当看到e5时就会猜测后面的是不是a5,bd\nthe i is {&lsquo;char&rsquo;: &lsquo;好&rsquo;, &lsquo;bytes&rsquo;: &rsquo;e5a5bd&rsquo;, &lsquo;start&rsquo;: 7, &rsquo;end&rsquo;: 8} the t is [&lsquo;68&rsquo;, &lsquo;65&rsquo;, &lsquo;6c&rsquo;, &lsquo;6c&rsquo;, &lsquo;6f&rsquo;, &rsquo;ef&rsquo;, &lsquo;bc&rsquo;, &lsquo;8c&rsquo;, &rsquo;e4&rsquo;, &lsquo;bd&rsquo;, &lsquo;a0&rsquo;, &rsquo;e5&rsquo;, &lsquo;a5&rsquo;, &lsquo;bd&rsquo;]\n1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 @classmethod def btp_hex_list(cls, text): tokens = [] t = [] for index,char in enumerate(text): utf8_bytes = char.encode(&#39;utf-8&#39;) hex_byte = &#39;&#39;.join(f&#34;{b:02x}&#34; for b in utf8_bytes) token = { &#39;char&#39;: char, &#39;bytes&#39;: hex_byte, &#39;start&#39;: index, &#39;end&#39;: index + 1 } tokens.append(token) print(f&#34;the token is {token}&#34;) t.extend([f&#34;{b:02x}&#34; for b in utf8_bytes]) return tokens, t 上面讲的还是词的预处理，主要目的是构建原始数据，其中t是组成词表的元素，而tokens则是词的数据表征。虽然这里得到了词/句的数据表示，但是不会这么直接的就把数组直接丢给模型，因为模型的计算是合数据的维度正相关的，比如一本书有几千万字节的词，把这个几千万个字节长度的输入进模型，复杂度直接N^2^爆炸。而且，单个字节，比如E6携带的有效信息太少，模型要在这265个词表里学习出来特征，会变得很复杂(直接原始自然语言词表也包含特征，但是此表太大，几万个)。算法的目的就是为了在模型输入合原始数据之间找到平衡点，讲这些字符级词表，按照一些规则组装成比较适合模型的输入格式。\n">
+<title></title>
+
+<link rel='canonical' href='http://localhost:1313/p/'>
+
+<link rel="stylesheet" href="/scss/style.min.946cca6c6259ef94ac55abfae7c7bf3291ea3ed5eea17ef77500b257217c6710.css"><meta property='og:title' content="">
+<meta property='og:description' content="date = &ldquo;2026-04-27&rdquo; draft = false title = &ldquo;diy_llm第二三章笔记&rdquo; reading_time = 30 tags=[ &ldquo;AI&rdquo;, &ldquo;LLM&rdquo; ] categories = [ &ldquo;LLM&rdquo; ] series=[&ldquo;A计划-LLM篇&rdquo;] image=&ldquo;index.assets/cover.jpg&rdquo;\n+++\n文章背景 最近在学CSS336，但是奈何本人水平有限，加上视频里的内容确实太跳跃，看起来太难以投入，所以决定找个别的LLM项目来学一下。所以找到这个项目，本篇文章是笔记，文本排版格式会有一些糙，但胜在全面详细，感兴趣的话可以阅读一二。\ndiy_llm chapter2 分词器 一般在语料中存在身份证，电话号码等信息都需要脱敏，因为这些语料是高基数且不重复的容易产生大量的低价值token片段。这会影响模型学习语言的规律。但是如果需要模型学习里识别里面的特定实体，那么则相反，这些语料就需要保留。还有就是在多语言或者混合语料中，应该考虑要准备对低资源语料做采样或者保留，否则可能因为高频语料主导模型导致模型的语言性能。\n预分词是指将原始文本切分成可以统计，合并的基础单元，比如字符，字节或者Unicod片段，常见的分词手段有按照空格，自字符，Unicode类别，甚至字节划分。\n按照标间符号，空格拆分 按照unicode类别拆分，比如按照数字，标点，中文，特殊字符拆分token，这样不同的unicode会归属到不同的token块。这种方法适合多语言混合的文本。 字节级拆分，完全不依赖语言，字符，种类，按照字节序列得到单个token 前两种策略在处理长缺乏显示分隔符合长段同类型文本时，可能会退化成字符级切分，但是第三种不会。因此UTF-8策略具备最强通用性，能减少未登录词(OOV)的出现。对于以空格为词边界的语言，可以按照正则等边界拆分，但是对于中文，则一般按照字符拆分。预分词最大的好处就是提升TOKEN利用率，减少未登录词的情况。\n预分词的目的是为了实现高效的模型输入，因为基于词组的原始的词表可能有几万个，但是基于字节的词表只有265个，这样输入的维度就变得更小，更方便模型预测接一个字符后的字符，比如e5a5bd 表示好，模型发现这三个字节经常在一起出现，那么当看到e5时就会猜测后面的是不是a5,bd\nthe i is {&lsquo;char&rsquo;: &lsquo;好&rsquo;, &lsquo;bytes&rsquo;: &rsquo;e5a5bd&rsquo;, &lsquo;start&rsquo;: 7, &rsquo;end&rsquo;: 8} the t is [&lsquo;68&rsquo;, &lsquo;65&rsquo;, &lsquo;6c&rsquo;, &lsquo;6c&rsquo;, &lsquo;6f&rsquo;, &rsquo;ef&rsquo;, &lsquo;bc&rsquo;, &lsquo;8c&rsquo;, &rsquo;e4&rsquo;, &lsquo;bd&rsquo;, &lsquo;a0&rsquo;, &rsquo;e5&rsquo;, &lsquo;a5&rsquo;, &lsquo;bd&rsquo;]\n1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 @classmethod def btp_hex_list(cls, text): tokens = [] t = [] for index,char in enumerate(text): utf8_bytes = char.encode(&#39;utf-8&#39;) hex_byte = &#39;&#39;.join(f&#34;{b:02x}&#34; for b in utf8_bytes) token = { &#39;char&#39;: char, &#39;bytes&#39;: hex_byte, &#39;start&#39;: index, &#39;end&#39;: index + 1 } tokens.append(token) print(f&#34;the token is {token}&#34;) t.extend([f&#34;{b:02x}&#34; for b in utf8_bytes]) return tokens, t 上面讲的还是词的预处理，主要目的是构建原始数据，其中t是组成词表的元素，而tokens则是词的数据表征。虽然这里得到了词/句的数据表示，但是不会这么直接的就把数组直接丢给模型，因为模型的计算是合数据的维度正相关的，比如一本书有几千万字节的词，把这个几千万个字节长度的输入进模型，复杂度直接N^2^爆炸。而且，单个字节，比如E6携带的有效信息太少，模型要在这265个词表里学习出来特征，会变得很复杂(直接原始自然语言词表也包含特征，但是此表太大，几万个)。算法的目的就是为了在模型输入合原始数据之间找到平衡点，讲这些字符级词表，按照一些规则组装成比较适合模型的输入格式。\n">
+<meta property='og:url' content='http://localhost:1313/p/'>
+<meta property='og:site_name' content='javashitu'>
+<meta property='og:type' content='article'><meta property='article:section' content='Post' />
+<meta name="twitter:title" content="">
+<meta name="twitter:description" content="date = &ldquo;2026-04-27&rdquo; draft = false title = &ldquo;diy_llm第二三章笔记&rdquo; reading_time = 30 tags=[ &ldquo;AI&rdquo;, &ldquo;LLM&rdquo; ] categories = [ &ldquo;LLM&rdquo; ] series=[&ldquo;A计划-LLM篇&rdquo;] image=&ldquo;index.assets/cover.jpg&rdquo;\n+++\n文章背景 最近在学CSS336，但是奈何本人水平有限，加上视频里的内容确实太跳跃，看起来太难以投入，所以决定找个别的LLM项目来学一下。所以找到这个项目，本篇文章是笔记，文本排版格式会有一些糙，但胜在全面详细，感兴趣的话可以阅读一二。\ndiy_llm chapter2 分词器 一般在语料中存在身份证，电话号码等信息都需要脱敏，因为这些语料是高基数且不重复的容易产生大量的低价值token片段。这会影响模型学习语言的规律。但是如果需要模型学习里识别里面的特定实体，那么则相反，这些语料就需要保留。还有就是在多语言或者混合语料中，应该考虑要准备对低资源语料做采样或者保留，否则可能因为高频语料主导模型导致模型的语言性能。\n预分词是指将原始文本切分成可以统计，合并的基础单元，比如字符，字节或者Unicod片段，常见的分词手段有按照空格，自字符，Unicode类别，甚至字节划分。\n按照标间符号，空格拆分 按照unicode类别拆分，比如按照数字，标点，中文，特殊字符拆分token，这样不同的unicode会归属到不同的token块。这种方法适合多语言混合的文本。 字节级拆分，完全不依赖语言，字符，种类，按照字节序列得到单个token 前两种策略在处理长缺乏显示分隔符合长段同类型文本时，可能会退化成字符级切分，但是第三种不会。因此UTF-8策略具备最强通用性，能减少未登录词(OOV)的出现。对于以空格为词边界的语言，可以按照正则等边界拆分，但是对于中文，则一般按照字符拆分。预分词最大的好处就是提升TOKEN利用率，减少未登录词的情况。\n预分词的目的是为了实现高效的模型输入，因为基于词组的原始的词表可能有几万个，但是基于字节的词表只有265个，这样输入的维度就变得更小，更方便模型预测接一个字符后的字符，比如e5a5bd 表示好，模型发现这三个字节经常在一起出现，那么当看到e5时就会猜测后面的是不是a5,bd\nthe i is {&lsquo;char&rsquo;: &lsquo;好&rsquo;, &lsquo;bytes&rsquo;: &rsquo;e5a5bd&rsquo;, &lsquo;start&rsquo;: 7, &rsquo;end&rsquo;: 8} the t is [&lsquo;68&rsquo;, &lsquo;65&rsquo;, &lsquo;6c&rsquo;, &lsquo;6c&rsquo;, &lsquo;6f&rsquo;, &rsquo;ef&rsquo;, &lsquo;bc&rsquo;, &lsquo;8c&rsquo;, &rsquo;e4&rsquo;, &lsquo;bd&rsquo;, &lsquo;a0&rsquo;, &rsquo;e5&rsquo;, &lsquo;a5&rsquo;, &lsquo;bd&rsquo;]\n1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 @classmethod def btp_hex_list(cls, text): tokens = [] t = [] for index,char in enumerate(text): utf8_bytes = char.encode(&#39;utf-8&#39;) hex_byte = &#39;&#39;.join(f&#34;{b:02x}&#34; for b in utf8_bytes) token = { &#39;char&#39;: char, &#39;bytes&#39;: hex_byte, &#39;start&#39;: index, &#39;end&#39;: index + 1 } tokens.append(token) print(f&#34;the token is {token}&#34;) t.extend([f&#34;{b:02x}&#34; for b in utf8_bytes]) return tokens, t 上面讲的还是词的预处理，主要目的是构建原始数据，其中t是组成词表的元素，而tokens则是词的数据表征。虽然这里得到了词/句的数据表示，但是不会这么直接的就把数组直接丢给模型，因为模型的计算是合数据的维度正相关的，比如一本书有几千万字节的词，把这个几千万个字节长度的输入进模型，复杂度直接N^2^爆炸。而且，单个字节，比如E6携带的有效信息太少，模型要在这265个词表里学习出来特征，会变得很复杂(直接原始自然语言词表也包含特征，但是此表太大，几万个)。算法的目的就是为了在模型输入合原始数据之间找到平衡点，讲这些字符级词表，按照一些规则组装成比较适合模型的输入格式。\n">
+    </head>
+    <body class="
+    article-page
+    ">
+    <script>
+        (function() {
+            const colorSchemeKey = 'StackColorScheme';
+            if(!localStorage.getItem(colorSchemeKey)){
+                localStorage.setItem(colorSchemeKey, "auto");
+            }
+        })();
+    </script><script>
+    (function() {
+        const colorSchemeKey = 'StackColorScheme';
+        const colorSchemeItem = localStorage.getItem(colorSchemeKey);
+        const supportDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches === true;
+
+        if (colorSchemeItem == 'dark' || colorSchemeItem === 'auto' && supportDarkMode) {
+            
+
+            document.documentElement.dataset.scheme = 'dark';
+        } else {
+            document.documentElement.dataset.scheme = 'light';
+        }
+    })();
+</script>
+<div class="container main-container flex on-phone--column extended"><aside class="sidebar left-sidebar sticky ">
+    <button class="hamburger hamburger--spin" type="button" id="toggle-menu" aria-label="切换菜单">
+        <span class="hamburger-box">
+            <span class="hamburger-inner"></span>
+        </span>
+    </button>
+
+    <header>
+        
+            
+            <figure class="site-avatar">
+                <a href="/">
+                
+                    
+                    
+                    
+                        
+                        <img src="/img/javashitu_hu_4b8114d532ed8b7b.jpg" width="300"
+                            height="300" class="site-logo" loading="lazy" alt="Avatar">
+                    
+                
+                </a>
+                
+            </figure>
+            
+        
+        
+        <div class="site-meta">
+            <h1 class="site-name"><a href="/">javashitu</a></h1>
+            <h2 class="site-description">退笔如山未足珍，读书万卷始通神</h2>
+        </div>
+    </header><ol class="menu-social">
+            
+                <li>
+                    <a 
+                        href='https://github.com/javashitu'
+                        target="_blank"
+                        title="GitHub"
+                        rel="me"
+                    >
+                        
+                        
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-brand-github" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M9 19c-4.3 1.4 -4.3 -2.5 -6 -3m12 5v-3.5c0 -1 .1 -1.4 -.5 -2c2.8 -.3 5.5 -1.4 5.5 -6a4.6 4.6 0 0 0 -1.3 -3.2a4.2 4.2 0 0 0 -.1 -3.2s-1.1 -.3 -3.5 1.3a12.3 12.3 0 0 0 -6.2 0c-2.4 -1.6 -3.5 -1.3 -3.5 -1.3a4.2 4.2 0 0 0 -.1 3.2a4.6 4.6 0 0 0 -1.3 3.2c0 4.6 2.7 5.7 5.5 6c-.6 .6 -.6 1.2 -.5 2v3.5" />
+</svg>
+
+
+
+                        
+                    </a>
+                </li>
+            
+                <li>
+                    <a 
+                        href='https://space.bilibili.com/1825238836'
+                        target="_blank"
+                        title="Bilibili"
+                        rel="me"
+                    >
+                        
+                        
+                            <?xml version="1.0" encoding="utf-8"?><!-- Uploaded to: SVG Repo, www.svgrepo.com, Generator: SVG Repo Mixer Tools -->
+<svg width="800px" height="800px" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg"><defs><style>.a{fill:none;stroke:#000000;stroke-linecap:round;stroke-linejoin:round;}</style></defs><rect class="a" x="6.1336" y="9.4032" width="35.7327" height="26.5581" rx="6.7532"/><line class="a" x1="17.4835" y1="4.5" x2="20.4078" y2="9.4032"/><line class="a" x1="13.2594" y1="21.6849" x2="20.0829" y2="18.9592"/><line class="a" x1="30.5165" y1="4.5" x2="27.5922" y2="9.4032"/><line class="a" x1="34.7406" y1="21.6849" x2="27.9171" y2="18.9592"/><path class="a" d="M29.0544,24.9161c-.5827,1.4721-1.1508,2.54-2.5273,2.54-1.074,0-1.666-.4976-2.5271-1.8363-.8611,1.3387-1.4531,1.8363-2.5271,1.8363-1.3765,0-1.9446-1.0682-2.5273-2.54"/><path class="a" d="M25.9676,35.9613v2.033s8.6917.2889,8.6917,5.5057H13.3407c0-5.2168,8.6917-5.5057,8.6917-5.5057v-2.033"/></svg>
+                        
+                    </a>
+                </li>
+            
+        </ol><ol class="menu" id="main-menu">
+        
+        
+        
+        <li >
+            <a href='/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-home" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <polyline points="5 12 3 12 12 3 21 12 19 12" />
+  <path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7" />
+  <path d="M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6" />
+</svg>
+
+
+
+                
+                <span>主页</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/%E5%85%B3%E4%BA%8E/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-user" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="7" r="4" />
+  <path d="M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />
+</svg>
+
+
+
+                
+                <span>关于</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/archives/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-archive" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <rect x="3" y="4" width="18" height="4" rx="2" />
+  <path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-10" />
+  <line x1="10" y1="12" x2="14" y2="12" />
+</svg>
+
+
+
+                
+                <span>归档</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/search/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-search" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="10" cy="10" r="7" />
+  <line x1="21" y1="21" x2="15" y2="15" />
+</svg>
+
+
+
+                
+                <span>搜索</span>
+            </a>
+        </li>
+        
+        
+        <li >
+            <a href='/%E5%8F%8B%E6%83%85%E9%93%BE%E6%8E%A5/' >
+                
+                
+                
+                    <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-link" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <path d="M10 14a3.5 3.5 0 0 0 5 0l4 -4a3.5 3.5 0 0 0 -5 -5l-.5 .5" />
+  <path d="M14 10a3.5 3.5 0 0 0 -5 0l-4 4a3.5 3.5 0 0 0 5 5l.5 -.5" />
+</svg>
+
+
+
+                
+                <span>友情链接</span>
+            </a>
+        </li>
+        
+        <li class="menu-bottom-section">
+            <ol class="menu">
+                    
+                        <li id="i18n-switch">  
+                            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-language" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z" fill="none"/>
+  <path d="M4 5h7" />
+  <path d="M9 3v2c0 4.418 -2.239 8 -5 8" />
+  <path d="M5 9c-.003 2.144 2.952 3.908 6.7 4" />
+  <path d="M12 20l4 -9l4 9" />
+  <path d="M19.1 18h-6.2" />
+</svg>
+
+
+
+                            <select name="language" title="language" onchange="window.location.href = this.selectedOptions[0].value">
+                                
+                                    <option value="http://localhost:1313/en/" >English</option>
+                                
+                                    <option value="http://localhost:1313/" selected>中文</option>
+                                
+                            </select>
+                        </li>
+                    
+                
+
+                
+                    <li id="dark-mode-toggle">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-left" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="8" cy="12" r="2" />
+  <rect x="2" y="6" width="20" height="12" rx="6" />
+</svg>
+
+
+
+                        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-toggle-right" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="16" cy="12" r="2" />
+  <rect x="2" y="6" width="20" height="12" rx="6" />
+</svg>
+
+
+
+                        <span>暗色模式</span>
+                    </li>
+                
+            </ol>
+        </li>
+    </ol>
+</aside>
+
+    <aside class="sidebar right-sidebar sticky">
+        
+            
+                
+    <section class="widget archives">
+        <div class="widget-icon">
+            <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-hash" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <line x1="5" y1="9" x2="19" y2="9" />
+  <line x1="5" y1="15" x2="19" y2="15" />
+  <line x1="11" y1="4" x2="7" y2="20" />
+  <line x1="17" y1="4" x2="13" y2="20" />
+</svg>
+
+
+
+        </div>
+        <h2 class="widget-title section-title">目录</h2>
+        
+        <div class="widget--toc">
+            <nav id="TableOfContents">
+  <ol>
+    <li><a href="#chapter2">chapter2</a>
+      <ol>
+        <li><a href="#分词器">分词器</a></li>
+        <li><a href="#常见分词器">常见分词器</a></li>
+        <li><a href="#思考">思考</a></li>
+      </ol>
+    </li>
+    <li><a href="#chapter3">chapter3</a>
+      <ol>
+        <li><a href="#成本核算">成本核算</a></li>
+        <li><a href="#时间估算">时间估算</a></li>
+        <li><a href="#内存估算">内存估算</a></li>
+        <li><a href="#张量">张量</a></li>
+        <li><a href="#内存">内存</a></li>
+        <li><a href="#自定义模型">自定义模型</a></li>
+      </ol>
+    </li>
+  </ol>
+</nav>
+        </div>
+    </section>
+
+            
+        
+    </aside>
+
+
+            <main class="main full-width">
+    <article class="main-article">
+    <header class="article-header">
+
+    <div class="article-details">
+    
+
+    <div class="article-title-wrapper">
+        <h2 class="article-title">
+            <a href="/p/"></a>
+        </h2>
+    
+        
+    </div>
+
+    
+    
+    
+    
+    <footer class="article-time">
+        
+
+        
+            <div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-clock" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <polyline points="12 7 12 12 15 15" />
+</svg>
+
+
+
+                
+                <time class="article-time--reading">
+                    
+                    58min
+                </time>
+            </div>
+        
+    </footer>
+    
+
+    
+</div>
+
+</header>
+
+    <section class="article-content">
+    
+    
+    <p>date = &ldquo;2026-04-27&rdquo;
+draft = false
+title = &ldquo;diy_llm第二三章笔记&rdquo;
+reading_time = 30
+tags=[
+&ldquo;AI&rdquo;,
+&ldquo;LLM&rdquo;
+]
+categories = [
+&ldquo;LLM&rdquo;
+]
+series=[&ldquo;A计划-LLM篇&rdquo;]
+image=&ldquo;index.assets/cover.jpg&rdquo;</p>
+<p>+++</p>
+<h1 id="文章背景">文章背景
+</h1><p>最近在学CSS336，但是奈何本人水平有限，加上视频里的内容确实太跳跃，看起来太难以投入，所以决定找个别的LLM项目来学一下。所以找到这个项目，本篇文章是笔记，文本排版格式会有一些糙，但胜在全面详细，感兴趣的话可以阅读一二。</p>
+<h1 id="diy_llm">diy_llm
+</h1><h2 id="chapter2">chapter2
+</h2><h3 id="分词器">分词器
+</h3><p>一般在语料中存在身份证，电话号码等信息都需要脱敏，因为这些语料是高基数且不重复的容易产生大量的低价值token片段。这会影响模型学习语言的规律。但是如果需要模型学习里识别里面的特定实体，那么则相反，这些语料就需要保留。还有就是在多语言或者混合语料中，应该考虑要准备对低资源语料做采样或者保留，否则可能因为高频语料主导模型导致模型的语言性能。</p>
+<p>预分词是指将原始文本切分成可以统计，合并的基础单元，比如字符，字节或者Unicod片段，常见的分词手段有按照空格，自字符，Unicode类别，甚至字节划分。</p>
+<ul>
+<li>按照标间符号，空格拆分</li>
+<li>按照unicode类别拆分，比如按照数字，标点，中文，特殊字符拆分token，这样不同的unicode会归属到不同的token块。这种方法适合多语言混合的文本。</li>
+<li>字节级拆分，完全不依赖语言，字符，种类，按照字节序列得到单个token</li>
+</ul>
+<p>前两种策略在处理长缺乏显示分隔符合长段同类型文本时，可能会退化成字符级切分，但是第三种不会。因此UTF-8策略具备最强通用性，能减少未登录词(OOV)的出现。对于以空格为词边界的语言，可以按照正则等边界拆分，但是对于中文，则一般按照字符拆分。预分词最大的好处就是提升TOKEN利用率，减少未登录词的情况。</p>
+<p>预分词的目的是为了实现高效的模型输入，因为基于词组的原始的词表可能有几万个，但是基于字节的词表只有265个，这样输入的维度就变得更小，更方便模型预测接一个字符后的字符，比如e5a5bd 表示好，模型发现这三个字节经常在一起出现，那么当看到e5时就会猜测后面的是不是a5,bd</p>
+<p>the i is {&lsquo;char&rsquo;: &lsquo;好&rsquo;, &lsquo;bytes&rsquo;: &rsquo;e5a5bd&rsquo;, &lsquo;start&rsquo;: 7, &rsquo;end&rsquo;: 8}
+the t is [&lsquo;68&rsquo;, &lsquo;65&rsquo;, &lsquo;6c&rsquo;, &lsquo;6c&rsquo;, &lsquo;6f&rsquo;, &rsquo;ef&rsquo;, &lsquo;bc&rsquo;, &lsquo;8c&rsquo;, &rsquo;e4&rsquo;, &lsquo;bd&rsquo;, &lsquo;a0&rsquo;, &rsquo;e5&rsquo;, &lsquo;a5&rsquo;, &lsquo;bd&rsquo;]</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt"> 1
+</span><span class="lnt"> 2
+</span><span class="lnt"> 3
+</span><span class="lnt"> 4
+</span><span class="lnt"> 5
+</span><span class="lnt"> 6
+</span><span class="lnt"> 7
+</span><span class="lnt"> 8
+</span><span class="lnt"> 9
+</span><span class="lnt">10
+</span><span class="lnt">11
+</span><span class="lnt">12
+</span><span class="lnt">13
+</span><span class="lnt">14
+</span><span class="lnt">15
+</span><span class="lnt">16
+</span><span class="lnt">17
+</span><span class="lnt">18
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl">    <span class="nd">@classmethod</span>
+</span></span><span class="line"><span class="cl">    <span class="k">def</span> <span class="nf">btp_hex_list</span><span class="p">(</span><span class="bp">cls</span><span class="p">,</span> <span class="n">text</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">        <span class="n">tokens</span> <span class="o">=</span> <span class="p">[]</span>
+</span></span><span class="line"><span class="cl">        <span class="n">t</span> <span class="o">=</span> <span class="p">[]</span>
+</span></span><span class="line"><span class="cl">        <span class="k">for</span> <span class="n">index</span><span class="p">,</span><span class="n">char</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">text</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">            <span class="n">utf8_bytes</span> <span class="o">=</span> <span class="n">char</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="s1">&#39;utf-8&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">hex_byte</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="sa">f</span><span class="s2">&#34;</span><span class="si">{</span><span class="n">b</span><span class="si">:</span><span class="s2">02x</span><span class="si">}</span><span class="s2">&#34;</span> <span class="k">for</span> <span class="n">b</span> <span class="ow">in</span> <span class="n">utf8_bytes</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">token</span> <span class="o">=</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">                <span class="s1">&#39;char&#39;</span><span class="p">:</span> <span class="n">char</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">                <span class="s1">&#39;bytes&#39;</span><span class="p">:</span> <span class="n">hex_byte</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">                <span class="s1">&#39;start&#39;</span><span class="p">:</span> <span class="n">index</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">                <span class="s1">&#39;end&#39;</span><span class="p">:</span> <span class="n">index</span> <span class="o">+</span> <span class="mi">1</span>
+</span></span><span class="line"><span class="cl">            <span class="p">}</span>
+</span></span><span class="line"><span class="cl">            <span class="n">tokens</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">token</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&#34;the token is </span><span class="si">{</span><span class="n">token</span><span class="si">}</span><span class="s2">&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">t</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="sa">f</span><span class="s2">&#34;</span><span class="si">{</span><span class="n">b</span><span class="si">:</span><span class="s2">02x</span><span class="si">}</span><span class="s2">&#34;</span> <span class="k">for</span> <span class="n">b</span> <span class="ow">in</span> <span class="n">utf8_bytes</span><span class="p">])</span>
+</span></span><span class="line"><span class="cl">        <span class="k">return</span> <span class="n">tokens</span><span class="p">,</span> <span class="n">t</span>
+</span></span><span class="line"><span class="cl">    
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>上面讲的还是词的预处理，主要目的是构建原始数据，其中t是组成词表的元素，而tokens则是词的数据表征。虽然这里得到了词/句的数据表示，但是不会这么直接的就把数组直接丢给模型，因为模型的计算是合数据的维度正相关的，比如一本书有几千万字节的词，把这个几千万个字节长度的输入进模型，复杂度直接N^2^爆炸。而且，单个字节，比如E6携带的有效信息太少，模型要在这265个词表里学习出来特征，会变得很复杂(直接原始自然语言词表也包含特征，但是此表太大，几万个)。算法的目的就是为了在模型输入合原始数据之间找到平衡点，讲这些字符级词表，按照一些规则组装成比较适合模型的输入格式。</p>
+<p>原始句子水石头，第一步的预处理是把石头打成沙子，算法就是把沙子做成砖头。</p>
+<p>有了词表合词的表征，接下来就要靠算吧把他们的特征计算出来，算法有</p>
+<ul>
+<li>BPE</li>
+<li>WordPiece</li>
+<li>Unigram</li>
+<li>SentencePiece</li>
+</ul>
+<p>这些算法各自有自己的特点，但是他们的目的都是为了让划分出来的token更加清晰一致（最大化语料似然），从而间接提升模型的性能。这些算法的最终目标是生成词表（比如要求达到32K或者50K大小的词表），一般衡量这些算法的优劣有平均token长度的里的未登录词率（oov），压缩率(总字符数/总token数)</p>
+<h3 id="常见分词器">常见分词器
+</h3><ol>
+<li>字符分词器
+将文本拆分成最小的字符单元，词表非常小，英文只需要26个字母，中文只需要几千个常用字。也没有OOV问题，但是序列会非常长，非常消耗LLM的上下文。而且单个字符比如T一般不具备语义，模型很难理解，所以需要加深网络层数。</li>
+<li>字节分词器
+任何语言的底层存储都是字节，那么所有的字都可以转化为256大小的基础词表，一般现代模型,比如LLMA不会纯使用字节分词器，而是将字节作为BPE的基础单元即BBPE。注意字节分词器的压缩率恒等于1，因为输入文本的字节数量=总token数量</li>
+<li>词级分词器
+深度学习早期时代，主流方法，基于空格或者分词算法，将文本切分成具备独立意义的词。他的问题是词表太大(几十万，上百万)OOV严重，任何没登录的人名，地标建筑都识别不了</li>
+<li>BPE分词
+现代LLM的主流分词方法，目的是为了在字符合词级之间找到平衡，一般过程是
+<ul>
+<li>初始化，将单次拆分成字符序列</li>
+<li>统计所有相邻字符出现的频率(比如e和s经常出现)</li>
+<li>将出现频率最高的合并成新的token,比如es</li>
+<li>循环上述步骤，直到达到预设的词表大小</li>
+</ul>
+</li>
+</ol>
+<p>加载deepseek的分词器，实际加载后，可能会出现基于token生成的字符串与原始的文本有差异，这是因为LLM所使用的词表在预训练过程中对某些字符或者子词的覆盖不足，导致模型无法生成对应的token，在还原时自然就丢失了这部分内容导致看起来可能是乱码，解决方式是增加训练语料或者进行更加充分的BPE训练，建立更加完整的token词映射表。</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt"> 1
+</span><span class="lnt"> 2
+</span><span class="lnt"> 3
+</span><span class="lnt"> 4
+</span><span class="lnt"> 5
+</span><span class="lnt"> 6
+</span><span class="lnt"> 7
+</span><span class="lnt"> 8
+</span><span class="lnt"> 9
+</span><span class="lnt">10
+</span><span class="lnt">11
+</span><span class="lnt">12
+</span><span class="lnt">13
+</span><span class="lnt">14
+</span><span class="lnt">15
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="kn">from</span> <span class="nn">transformers</span> <span class="kn">import</span> <span class="n">AutoTokenizer</span>
+</span></span><span class="line"><span class="cl"><span class="k">class</span> <span class="nc">LoadTokenizer</span><span class="p">():</span>
+</span></span><span class="line"><span class="cl">    <span class="n">model_path</span> <span class="o">=</span> <span class="s2">&#34;../../../data/model/deepseekr1-1.5b&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="k">def</span> <span class="nf">load_tokenizer</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">text</span> <span class="p">:</span> <span class="nb">str</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&#34;will encode and decoding text </span><span class="si">{</span><span class="n">text</span><span class="si">}</span><span class="s2">&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="n">tokenizer</span> <span class="o">=</span> <span class="n">AutoTokenizer</span><span class="o">.</span><span class="n">from_pretrained</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">model_path</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&#34;load model </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">model_path</span><span class="si">}</span><span class="s2"> success&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&#34;word dict length </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">tokenizer</span><span class="o">.</span><span class="n">get_vocab</span><span class="p">())</span><span class="si">}</span><span class="s2">&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="n">encode_ids</span> <span class="o">=</span> <span class="n">tokenizer</span><span class="o">.</span><span class="n">encode</span><span class="p">(</span><span class="n">text</span><span class="p">,</span> <span class="n">add_special_tokens</span> <span class="o">=</span> <span class="kc">False</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&#34;the encode ids </span><span class="si">{</span><span class="n">encode_ids</span><span class="si">}</span><span class="s2">&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="n">tokens</span> <span class="o">=</span> <span class="n">tokenizer</span><span class="o">.</span><span class="n">convert_ids_to_tokens</span><span class="p">(</span><span class="n">encode_ids</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&#34;the decoding token </span><span class="si">{</span><span class="n">tokens</span><span class="si">}</span><span class="s2">&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="n">load_tokenizer</span> <span class="o">=</span> <span class="n">LoadTokenizer</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl"><span class="n">text</span> <span class="o">=</span> <span class="s2">&#34;注意力机制是AI最重要的特性&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">load_tokenizer</span><span class="o">.</span><span class="n">load_tokenizer</span><span class="p">(</span><span class="n">text</span><span class="p">)</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="思考">思考
+</h3><ol>
+<li>研究表明，视觉特征能增强LLM的表达能力，但并不是适用于所有的任务，那么是否可以在视觉表征与离散token之间寻求平衡点，同时为模型提供两种表征方式，并且借鉴MOE的思想设计轻量级路由，使模型能在不同的任务或者语言之间自动选择或者融合最合适的词，从而提升模型的性能。</li>
+<li>能否设计一种“自适应分词器”，并且让分词器和llm分开训练，并且通过特殊机制让分词器与模型结合起来，使得模型在执行任务时，分词器仍然能够动态学习和优化token的划分策略。</li>
+<li>能否借助微分子词模块，元学习和强化学习等方法，让分词器能从少量对话或者任务样本中自动发现最合适的token划分方式，从而降低模型的任务对数据的依赖性并且提升模型的泛化能力。</li>
+</ol>
+<h2 id="chapter3">chapter3
+</h2><h3 id="成本核算">成本核算
+</h3><p>Napkin math(餐巾纸计算，就是快速估算)</p>
+<h3 id="时间估算">时间估算
+</h3><p>FLOPS（floating point operations）浮点运算次数，表示一个模型在执行过程所需要的执行的浮点加减乘除的运算总次数。经验公式是</p>
+<blockquote>
+<p>总计算量 ≈ 6 * 参数车辆 * token数量</p>
+<p>6倍是因为前向传播forward pass需要计算加法 + 乘法的计算，就是2倍，反向传播backword pass需要计算梯度，约等于前向传播的2倍工作量</p></blockquote>
+<p>比如训练一个70B参数的模型，使用15T数据，那么就需要</p>
+<p>6 * 70 * 10^9^ * 15 * 10^12^ ≈ 6.3 * 10 ^24^ FLOPS 的计算量</p>
+<p>如果使用H100显卡(1979 TFLOPS)计算，巅峰算力1979 TFLOPS，万亿级别，但是这个算力是使用了FP16或者BF16 ,并且开启结构化稀疏(structured sparsity)才能达到。一般的普通稠密模型(llm3,qwen3等)，理论性能减半约990 TFLOPS</p>
+<p>结构化稀疏是指的一种模型压缩方法，将稠密模型按照50%稀疏度剪枝，称为n:m，也就是连续m个权重必须减掉n个比如2:4,4:8。非结构化剪枝性能最差因为需要随机</p>
+<p><img src="/p/index.assets/image-20260408162706890-1777297947897.png"
+	width="919"
+	height="504"
+	srcset="/p/index.assets/image-20260408162706890-1777297947897_hu_a8a646c209c7aeb0.png 480w, /p/index.assets/image-20260408162706890-1777297947897_hu_10487568bf10906b.png 1024w"
+	loading="lazy"
+	
+		alt="image-20260408162706890"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="182"
+		data-flex-basis="437px"
+	
+></p>
+<p>显卡的理论性能(MFU model flops utilization 模型利用率)一般跑不满，一般是30%-60%,计算时可以取50%</p>
+<p>那么假设赢1024张H100来训练这个模型，就需要时间</p>
+<p>6.3 * 10^24^ / (5 * 10^17^)  = 1.26 * 10^7^ 秒 = 146天</p>
+<h3 id="内存估算">内存估算
+</h3><p>提问在8张H100(每张80G显存)上使用adamW优化器(朴素实现，所有数据都是float32，且不开启混合精度压缩)能训练的最大模型参数数量是多少。</p>
+<p>首先训练时，不只有参数parameters,还要存储</p>
+<ul>
+<li>梯度Gradients 和参数一样大4字节</li>
+<li>优化器状态Optimizer states，不同优化器存储的数据不一样，比如adamW需要存储参数的一阶矩估计和二阶矩估计，2 * 4 = 8字节</li>
+</ul>
+<p>因此每个参数实际占用16字节</p>
+<p>最大参数量 = 640 * 10^9^ / 16 = 400 亿 = 40B</p>
+<p>这只是粗略的估算</p>
+<h3 id="张量">张量
+</h3><p>模型的参数，梯度，优化器状态，输入数据，等等数据都是以张量存储的。大多数对张量的操作都是从其他的张量来的。许多的操作只会提供张量的视图view不会创建新的张量。因此修改一个张量也会影响另一个。</p>
+<p>张量的view在内存中可能不是按顺序存储那么就是不连续的，不能对非连续的张量再次执行某些操作比如view,如果需要，需要先对张量执行.contiguous()方法，它会将张量复制到新的内存中。</p>
+<p>可以对张量进行逐元素操作(elements wise operations)，也就是对每个元素分别进行某种操作，比如x.pow(2) 或者x+x，这种运算就是逐元素操作。矩阵乘法使用 @ 连接，矩阵的乘法时会自动执行只计算后面一个tensor的最后两个维度</p>
+<p>因果注意力掩码(causal attention mask)函数triu，也就是大模型里的上三角矩阵，保证第j个词只能看到第j个词之前的词。这种上三角矩阵m[i,j]表示i位置对于j位置的贡献，当i比j大时(i在j之后，贡献应该为0),默认3 x 3的全1张量x，x.triu()输出</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span><span class="lnt">2
+</span><span class="lnt">3
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-fallback" data-lang="fallback"><span class="line"><span class="cl">tensor([[1., 1., 1.],
+</span></span><span class="line"><span class="cl">        [0., 1., 1.],
+</span></span><span class="line"><span class="cl">        [0., 0., 1.]])
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>在实际运算时，一般会批处理，也就是一次输入读个张量，比如torch.ones(4,8,16,32)，这里的参数分别是批大小(包含的矩阵个数)，序列长度(每个样本的序列长度，有点难以理解)，后面的16 ，32则是表示实际的矩阵的形状，在实际计算时，只需要保证后面的张量第一个维度是32即可</p>
+<p><img src="/p/index.assets/image-20260408184923199-1777297947898.png"
+	width="2162"
+	height="1148"
+	srcset="/p/index.assets/image-20260408184923199-1777297947898_hu_3077eb82bfaa4911.png 480w, /p/index.assets/image-20260408184923199-1777297947898_hu_ef729e5d1e86ee1b.png 1024w"
+	loading="lazy"
+	
+		alt="image-20260408184923199"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="188"
+		data-flex-basis="451px"
+	
+></p>
+<p>一般的在定义tensor时，会定义batch seq heads hidden，但是torch的tensor本身不带注释，很容易搞混，所以可以用jaxtyping来声明每一个维度的含义，还可以配合beartype做静态类型检查。</p>
+<p>广义矩阵乘法还可以用einops库来简化操作，比如在einsum里最后输出被隐藏的维度会被自动求和。这个库的很多写法比较语法糖</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span><span class="lnt">2
+</span><span class="lnt">3
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl">        <span class="n">t</span> <span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">,</span> <span class="s2">&#34;batch seq hidden&#34;</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="n">z1</span> <span class="o">=</span> <span class="n">z</span> <span class="o">@</span> <span class="n">t</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="o">-</span><span class="mi">2</span> <span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="n">z2</span> <span class="o">=</span> <span class="n">einsum</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="n">t</span><span class="p">,</span> <span class="s2">&#34;... seq1 hidden,... seq2 hidden -&gt; ... seq1 seq2&#34;</span><span class="p">)</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>einops最强大的是他可以对维度进行拆分和合并，reearange函数在再拆分时，totoal_hidden可以拆分成2 * 4, 4 * 2, 1 * 8，所以要固定一个维度heads为2。&hellip;通配符表示前面所有的维度，z拆分后就可以和w的维度匹配进行计算</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt">1
+</span><span class="lnt">2
+</span><span class="lnt">3
+</span><span class="lnt">4
+</span><span class="lnt">5
+</span><span class="lnt">6
+</span><span class="lnt">7
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl">        <span class="n">z</span> <span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">,</span> <span class="s2">&#34;batch seq total_hide&#34;</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">8</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="n">w</span> <span class="p">:</span> <span class="n">Float</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">,</span> <span class="s2">&#34;hidden1 , hidden2&#34;</span><span class="p">]</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="mi">4</span><span class="p">,</span><span class="mi">4</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="kn">from</span> <span class="nn">einops</span> <span class="kn">import</span> <span class="n">rearrange</span>
+</span></span><span class="line"><span class="cl">        <span class="n">z</span> <span class="o">=</span> <span class="n">rearrange</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="s2">&#34;... (heads hidden1) -&gt; ... heads hidden1 &#34;</span><span class="p">,</span> <span class="n">heads</span> <span class="o">=</span> <span class="mi">2</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="n">x</span> <span class="o">=</span> <span class="n">einsum</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="n">w</span><span class="p">,</span> <span class="s2">&#34;... hidden1 , hidden1 hidden2 -&gt; ... hidden2&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="nb">print</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="n">x</span> <span class="o">=</span> <span class="n">rearrange</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="s2">&#34;... heads hidden2 -&gt; ... (heads hidden2)&#34;</span><span class="p">)</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><h3 id="内存">内存
+</h3><ul>
+<li>FP32 一般用于炼丹时存储参数的主副本和优化器状态</li>
+<li>FP16 上一代混合精度训练时使用，基本被BF16取代</li>
+<li>BF16 神经网络对小数点后的几位不敏感，但是对数值范围敏感，所以设计了8位指数位+7为尾数位，当前训练的主流选择
+<img src="/p/index.assets/image-20260409152702605-1777297947898.png"
+	width="1504"
+	height="472"
+	srcset="/p/index.assets/image-20260409152702605-1777297947898_hu_8dc5e6447a8e15f0.png 480w, /p/index.assets/image-20260409152702605-1777297947898_hu_6ee12073be4c1d27.png 1024w"
+	loading="lazy"
+	
+		alt="image-20260409152702605"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="318"
+		data-flex-basis="764px"
+	
+></li>
+<li>FP8 以及他的各种变体E5M2，推理阶段量化</li>
+</ul>
+<p>numpy和pytorch的张量在底层都是行存储，每个tensor内部包含步长strides和指针，指针指向实际的内存，比如二维tensor里，步长就表示每一行的元素数量，要移动到下一行就只需要跳过指定步长的元素。view操作不会复制底层内存，所以很多操作不支持</p>
+<p><img src="/p/index.assets/image-20260409153321588-1777297947898.png"
+	width="1540"
+	height="910"
+	srcset="/p/index.assets/image-20260409153321588-1777297947898_hu_fdaa4f239877091c.png 480w, /p/index.assets/image-20260409153321588-1777297947898_hu_d2c8190e82f79570.png 1024w"
+	loading="lazy"
+	
+		alt="image-20260409153321588"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="169"
+		data-flex-basis="406px"
+	
+></p>
+<p>FLOPs表示浮点运算的总次数，FLOPS(FLOP/s)表示每秒浮点运算次数</p>
+<p>以线性模型为例，计算次数等于 2 * 数据量 * 参数数量，transformer也适用这个公式，因为大部分计算来自矩阵乘法(90%)</p>
+<p>MFU(Model FLOPs Utilization)模型性能利用率 = 实际FLOPS/峰值FLOPS，一般大于0.5视为还不错的性能，达到1基本不可能</p>
+<p>关于梯度的计算，本质上x和y共同经过计算组成一组计算图，直到loss，当执行反向传播时，则是以loss为根，计算到x和y的梯度，x和y是这个计算图的叶子结点，也是真正需要计算出梯度的节点。中间的节点产生的梯度pytorch会删除。但是在pytorch里不是所有的参与计算的tensor都是叶子结点，叶子结点必须是手动创建的，不能是中间计算过程产生的(pred_y就不是)，而且必须指定required_grad = True，否则会被当做常量。</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt"> 1
+</span><span class="lnt"> 2
+</span><span class="lnt"> 3
+</span><span class="lnt"> 4
+</span><span class="lnt"> 5
+</span><span class="lnt"> 6
+</span><span class="lnt"> 7
+</span><span class="lnt"> 8
+</span><span class="lnt"> 9
+</span><span class="lnt">10
+</span><span class="lnt">11
+</span><span class="lnt">12
+</span><span class="lnt">13
+</span><span class="lnt">14
+</span><span class="lnt">15
+</span><span class="lnt">16
+</span><span class="lnt">17
+</span><span class="lnt">18
+</span><span class="lnt">19
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl">    <span class="nd">@classmethod</span>
+</span></span><span class="line"><span class="cl">    <span class="k">def</span> <span class="nf">backward_compute</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">        <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">1.</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">])</span>
+</span></span><span class="line"><span class="cl">        <span class="n">y</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mf">1.</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">requires_grad</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 一维时是计算向量点积</span>
+</span></span><span class="line"><span class="cl">        <span class="n">pred_y</span> <span class="o">=</span> <span class="n">x</span> <span class="o">@</span> <span class="n">y</span>
+</span></span><span class="line"><span class="cl">        <span class="nb">print</span><span class="p">(</span><span class="n">pred_y</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="n">loss</span> <span class="o">=</span> <span class="mf">0.5</span> <span class="o">*</span> <span class="p">(</span><span class="n">pred_y</span> <span class="o">-</span> <span class="mi">5</span><span class="p">)</span><span class="o">.</span><span class="n">pow</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 触发反向传播</span>
+</span></span><span class="line"><span class="cl">        <span class="n">loss</span><span class="o">.</span><span class="n">backward</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># loss是计算图的根，梯度等于1，他的梯度在计算过程里删除了</span>
+</span></span><span class="line"><span class="cl">        <span class="k">assert</span> <span class="n">loss</span><span class="o">.</span><span class="n">grad</span> <span class="ow">is</span> <span class="kc">None</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 中间变量的梯度会在计算后删除，所以是none</span>
+</span></span><span class="line"><span class="cl">        <span class="k">assert</span> <span class="n">pred_y</span><span class="o">.</span><span class="n">grad</span> <span class="ow">is</span> <span class="kc">None</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 保留grad</span>
+</span></span><span class="line"><span class="cl">        <span class="n">pred_y</span><span class="o">.</span><span class="n">retain_grad</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">        <span class="k">assert</span> <span class="n">x</span><span class="o">.</span><span class="n">grad</span> <span class="ow">is</span> <span class="kc">None</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># y的梯度就是x的值</span>
+</span></span><span class="line"><span class="cl">        <span class="k">assert</span> <span class="n">torch</span><span class="o">.</span><span class="n">equal</span><span class="p">(</span><span class="n">y</span><span class="o">.</span><span class="n">grad</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">]))</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>还是以线性模型为例子，反向传播时需要的FLOPs = 6 * 数据点数量 * 参数数量</p>
+<h3 id="自定义模型">自定义模型
+</h3><p>Torch.random是标准高斯分布初始化，这种初始化随着层数变深，数值会非常大，所以需要优化，一般是通过除以输入维度的平方根来解决。除此之外还需要o将随机数控制在一个合理的范围内(xavier初始化)，避免高斯分布的尾部产生极端值。</p>
+<p>在dim = 3,layer = 4的场景下。我在init方法里用moduleList创建出来了4个layer，也就是说这些layer就是相连接的，最后又手动定义了一个layer final,这个final可以认为时输出层。在实际的计算时，x是输入，那么B,D就是x的输入维度，D应该是等于3，B则是这一批样本的数量。在计算时就是不断的把样本x输入进每一层layer，每层layer里会执行计算。最后我再把4层layer的计算结果调用final手动计算。最后的squeeze(-1)是因为我的计算结果是一个B行1列的矩阵，squeeze会把矩阵压缩成张量，最后得到的就是一个长度B的张量</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt"> 1
+</span><span class="lnt"> 2
+</span><span class="lnt"> 3
+</span><span class="lnt"> 4
+</span><span class="lnt"> 5
+</span><span class="lnt"> 6
+</span><span class="lnt"> 7
+</span><span class="lnt"> 8
+</span><span class="lnt"> 9
+</span><span class="lnt">10
+</span><span class="lnt">11
+</span><span class="lnt">12
+</span><span class="lnt">13
+</span><span class="lnt">14
+</span><span class="lnt">15
+</span><span class="lnt">16
+</span><span class="lnt">17
+</span><span class="lnt">18
+</span><span class="lnt">19
+</span><span class="lnt">20
+</span><span class="lnt">21
+</span><span class="lnt">22
+</span><span class="lnt">23
+</span><span class="lnt">24
+</span><span class="lnt">25
+</span><span class="lnt">26
+</span><span class="lnt">27
+</span><span class="lnt">28
+</span><span class="lnt">29
+</span><span class="lnt">30
+</span><span class="lnt">31
+</span><span class="lnt">32
+</span><span class="lnt">33
+</span><span class="lnt">34
+</span><span class="lnt">35
+</span><span class="lnt">36
+</span><span class="lnt">37
+</span><span class="lnt">38
+</span><span class="lnt">39
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="k">class</span> <span class="nc">Cruncher</span><span class="p">(</span><span class="n">nn</span><span class="o">.</span><span class="n">Module</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">    <span class="c1"># 以dim = 3， layer = 4为例</span>
+</span></span><span class="line"><span class="cl">    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">dim</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">num_layer</span><span class="p">:</span> <span class="nb">int</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">        <span class="nb">super</span><span class="p">()</span><span class="o">.</span><span class="fm">__init__</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">        <span class="bp">self</span><span class="o">.</span><span class="n">dim</span> <span class="o">=</span> <span class="n">dim</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 这里其实是创建了4个layer放进了ModuleList里，layer之间并没有形成全连接</span>
+</span></span><span class="line"><span class="cl">        <span class="bp">self</span><span class="o">.</span><span class="n">layers</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">ModuleList</span><span class="p">([</span>
+</span></span><span class="line"><span class="cl">            <span class="n">Linear</span><span class="p">(</span><span class="n">dim</span><span class="p">,</span> <span class="n">dim</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_layer</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="p">])</span>
+</span></span><span class="line"><span class="cl">        <span class="bp">self</span><span class="o">.</span><span class="n">final</span> <span class="o">=</span> <span class="n">Linear</span><span class="p">(</span><span class="n">dim</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="k">def</span> <span class="nf">forward</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">x</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># x表示一批数据，数据里有B个样本，每个样本有D个维度</span>
+</span></span><span class="line"><span class="cl">        <span class="n">B</span><span class="p">,</span><span class="n">D</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">size</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 因为有这个计算，4层layer之间才形成了全连接</span>
+</span></span><span class="line"><span class="cl">        <span class="k">for</span> <span class="n">layer</span> <span class="ow">in</span> <span class="bp">self</span><span class="o">.</span><span class="n">layers</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">            <span class="n">x</span> <span class="o">=</span> <span class="n">layer</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 最后使用final层进行计算，得到最终的输出结果，因为有B个样本，最终计算得出的结果其实就是B个维度为1的tensor</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 这里注意，这里的B个维度为1的tensor不是[1,2,3]这种格式而是[[1],[2],[3]]这种格式，所以需要最后的squeeze</span>
+</span></span><span class="line"><span class="cl">        <span class="n">x</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">final</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="k">assert</span> <span class="n">x</span><span class="o">.</span><span class="n">size</span><span class="p">()</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">Size</span><span class="p">([</span><span class="n">B</span><span class="p">,</span> <span class="mi">1</span><span class="p">])</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># squeeze几挤压掉最后一个维度，会把tensor编程[1,2,3这种格式]</span>
+</span></span><span class="line"><span class="cl">        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">squeeze</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="k">assert</span> <span class="n">x</span><span class="o">.</span><span class="n">size</span><span class="p">()</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">Size</span><span class="p">([</span><span class="n">B</span><span class="p">])</span>
+</span></span><span class="line"><span class="cl">        <span class="k">return</span> <span class="n">x</span>
+</span></span><span class="line"><span class="cl"><span class="n">D</span> <span class="o">=</span> <span class="mi">3</span>
+</span></span><span class="line"><span class="cl"><span class="n">L</span> <span class="o">=</span> <span class="mi">4</span>
+</span></span><span class="line"><span class="cl"><span class="n">model</span> <span class="o">=</span> <span class="n">Cruncher</span><span class="p">(</span><span class="n">dim</span> <span class="o">=</span> <span class="n">D</span><span class="p">,</span><span class="n">num_layer</span> <span class="o">=</span> <span class="n">L</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="n">param_info</span> <span class="o">=</span> <span class="p">[</span>
+</span></span><span class="line"><span class="cl">    <span class="p">(</span><span class="n">name</span><span class="p">,</span> <span class="n">param</span><span class="o">.</span><span class="n">numel</span><span class="p">())</span>
+</span></span><span class="line"><span class="cl">    <span class="c1"># state_dict()返回的模型的所有可训练参数列表</span>
+</span></span><span class="line"><span class="cl">    <span class="c1">#name layers.0.weight      | elements: 9</span>
+</span></span><span class="line"><span class="cl">    <span class="c1">#name layers.0.bias        | elements: 3</span>
+</span></span><span class="line"><span class="cl">    <span class="c1">#这里面打印出来的格式是这样的，bias是3是因为模型的维度是3，weight是9是因为维度是全连接，所以weight是9</span>
+</span></span><span class="line"><span class="cl">    <span class="k">for</span> <span class="n">name</span><span class="p">,</span> <span class="n">param</span> <span class="ow">in</span> <span class="n">model</span><span class="o">.</span><span class="n">state_dict</span><span class="p">()</span><span class="o">.</span><span class="n">items</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl"><span class="p">]</span>
+</span></span><span class="line"><span class="cl"><span class="k">for</span> <span class="n">name</span><span class="p">,</span><span class="n">size</span> <span class="ow">in</span> <span class="n">param_info</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&#34;name </span><span class="si">{</span><span class="n">name</span><span class="si">:</span><span class="s2">20</span><span class="si">}</span><span class="s2"> | elements: </span><span class="si">{</span><span class="n">size</span><span class="si">}</span><span class="s2">&#34;</span><span class="p">)</span>      
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>这段代码，在dim = 3, layer = 4时的结构是下面这样的，整个就是线性变换的全连接，里面的dim可以理解成输入样本的特征维度，layer则是隐藏层的层数</p>
+<p><img src="/p/index.assets/image-20260410113741159-1777297947898.png"
+	width="1451"
+	height="1559"
+	srcset="/p/index.assets/image-20260410113741159-1777297947898_hu_d21b054fe15b36f7.png 480w, /p/index.assets/image-20260410113741159-1777297947898_hu_fb90ff059b666d7.png 1024w"
+	loading="lazy"
+	
+		alt="image-20260410113741159"
+	
+	
+		class="gallery-image" 
+		data-flex-grow="93"
+		data-flex-basis="223px"
+	
+></p>
+<p>在实际训练时，必须保证模型的稳定性(deterministic)，也就是避免实验每次的道德结果不一样，有三个地方需要设置随机数种子，一般这三个地方点都设置成一样的数值</p>
+<ul>
+<li>torch.manual_seed(seed)</li>
+<li>np.random.seed(seed)</li>
+<li>random.seed(seed)</li>
+</ul>
+<p>在加载数据时，一般数据会非常大，不能全部放进内存。这些数据一般会被编码存储进npy文件里，这些文件里存储的是一个超长的一维数组。模型实际使用时会基于内存映射创建出数组，真正需要时在从这个映射出的数组来访问数据。工程商真正的访问数据时会使用DataLoader，这里的教程里定义了一个get_batch方法来从数据里切出来我们制定形状的tensor</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt"> 1
+</span><span class="lnt"> 2
+</span><span class="lnt"> 3
+</span><span class="lnt"> 4
+</span><span class="lnt"> 5
+</span><span class="lnt"> 6
+</span><span class="lnt"> 7
+</span><span class="lnt"> 8
+</span><span class="lnt"> 9
+</span><span class="lnt">10
+</span><span class="lnt">11
+</span><span class="lnt">12
+</span><span class="lnt">13
+</span><span class="lnt">14
+</span><span class="lnt">15
+</span><span class="lnt">16
+</span><span class="lnt">17
+</span><span class="lnt">18
+</span><span class="lnt">19
+</span><span class="lnt">20
+</span><span class="lnt">21
+</span><span class="lnt">22
+</span><span class="lnt">23
+</span><span class="lnt">24
+</span><span class="lnt">25
+</span><span class="lnt">26
+</span><span class="lnt">27
+</span><span class="lnt">28
+</span><span class="lnt">29
+</span><span class="lnt">30
+</span><span class="lnt">31
+</span><span class="lnt">32
+</span><span class="lnt">33
+</span><span class="lnt">34
+</span><span class="lnt">35
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="k">class</span> <span class="nc">ModelTrain</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">    <span class="k">def</span> <span class="fm">__init__</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">        <span class="bp">self</span><span class="o">.</span><span class="n">dataPath</span> <span class="o">=</span> <span class="s2">&#34;../../../data/chapter3/data.py&#34;</span>
+</span></span><span class="line"><span class="cl">        <span class="n">origin_data</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">7</span><span class="p">,</span> <span class="mi">8</span><span class="p">],</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="n">origin_data</span><span class="o">.</span><span class="n">tofile</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">dataPath</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="nd">@classmethod</span>
+</span></span><span class="line"><span class="cl">    <span class="k">def</span> <span class="nf">get_batch</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">data</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ndarray</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">sequence_length</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">device</span><span class="p">:</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 1. 随机选择 B 个起始位置</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 这里的上限是 len(data) - sequence_length，防止切片越界</span>
+</span></span><span class="line"><span class="cl">        <span class="n">start_indices</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">data</span><span class="p">)</span> <span class="o">-</span> <span class="n">sequence_length</span><span class="p">,</span> <span class="p">(</span><span class="n">batch_size</span><span class="p">,))</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">        <span class="c1"># 2. 根据索引提取数据并组成矩阵 (B, L)</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 这里的逻辑是：对每一个 start 索引，取 data[start : start + sequence_length]</span>
+</span></span><span class="line"><span class="cl">        <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span><span class="n">torch</span><span class="o">.</span><span class="n">from_numpy</span><span class="p">(</span><span class="n">data</span><span class="p">[</span><span class="n">i</span><span class="p">:</span><span class="n">i</span> <span class="o">+</span> <span class="n">sequence_length</span><span class="p">]</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">int64</span><span class="p">))</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">start_indices</span><span class="p">])</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">        <span class="c1"># 3. 把数据移动到对应的设备上（CPU/GPU/MPS）</span>
+</span></span><span class="line"><span class="cl">        <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">,</span> <span class="n">non_blocking</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">        <span class="c1"># 4. 固定内存优化（仅限 CUDA）</span>
+</span></span><span class="line"><span class="cl">        <span class="k">if</span> <span class="n">device</span><span class="o">.</span><span class="n">type</span> <span class="o">==</span> <span class="s1">&#39;cuda&#39;</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">            <span class="n">x</span> <span class="o">=</span> <span class="n">x</span><span class="o">.</span><span class="n">pin_memory</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">        <span class="k">return</span> <span class="n">x</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="n">modelTrain</span> <span class="o">=</span> <span class="n">ModelTrain</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl"><span class="n">data</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">memmap</span><span class="p">(</span><span class="n">modelTrain</span><span class="o">.</span><span class="n">dataPath</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">int32</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="n">B</span> <span class="o">=</span> <span class="mi">2</span>
+</span></span><span class="line"><span class="cl"><span class="c1"># 虽然这里叫做L，但是这个值其实对应在模型里的D，这两个值必须一致，否则运算会失败</span>
+</span></span><span class="line"><span class="cl"><span class="c1"># 这里之所以叫做L是因为在Transformer模型里这个设置一般是词元的数量，也就是一句话里词的数量</span>
+</span></span><span class="line"><span class="cl"><span class="n">L</span> <span class="o">=</span> <span class="mi">4</span>
+</span></span><span class="line"><span class="cl"><span class="n">device</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">(</span><span class="s2">&#34;cuda&#34;</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">()</span> <span class="k">else</span> <span class="s2">&#34;cpu&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="n">x</span> <span class="o">=</span> <span class="n">ModelTrain</span><span class="o">.</span><span class="n">get_batch</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">B</span><span class="p">,</span> <span class="n">L</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="nb">print</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="k">assert</span> <span class="n">x</span><span class="o">.</span><span class="n">size</span><span class="p">()</span> <span class="o">==</span> <span class="n">torch</span><span class="o">.</span><span class="n">Size</span><span class="p">([</span><span class="n">B</span><span class="p">,</span><span class="n">L</span><span class="p">])</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>让我来捋一下这个代码的逻辑，代码先定义了一堆参数并用这些参数定义了模型和优化器还有损失函数。然后开启循环，每次循环里取出的一批数据有32条，并且每条数据4个特征维度。然后随机初始化一个包含32个元素的向量来作为目标值y_true。再开始计算之前调用zere_grad清空梯度，为什么需要这一步我猜测是因为optimizer会在每一批数据之间累计梯度，这些梯度指的就是model里每一层layer里的参数的梯度。如果不手动清空就会累计上上一批次的梯度。之所以梯度会累计，是因为设计如此，因为如果在比较小的显存GPU上执行，一次需要输入很大的批次数据，但是没办法全量输入，就可以分解为多个小批次的数据，这样最后累计出来的梯度和一次输入整个批次还是一样的。</p>
+<p>然后调用损失函数criterion计算真实值和预测值的差距。然后计算损失值loss关于layer里各个参数的梯度，也就是执行backward。然后根据损失值的大小，由优化器optimizer来调整模型里各个layer的参数。</p>
+<p>为什么loss能执行反向更新，loss是声明出来的损失函数的计算值，它确实跟模型的输出结果y_pred有关系，但是我没看到它怎么和模型model本身有什么绑定关系，那么他是怎么绑定上模型的各个层，并且执行的反向传播呢。实际上loss并不是一个值，loss是关于y_pred的计算图，y_pred本身是由final层计算得出的，loss则是在final后接上的心得计算，这就形成了从final到前面所有层参数的计算图，也正是有这个图，所以loss能顺着final找到前面每一层得参数，然后为每个参数更欣赏梯度，每个参数其实有一个.grad 属性，里面装的就是参数的梯度。backward时就是去填充这些grad</p>
+<p>optimizer也是类似的问题，optimizer本身并没有和model有关联，它又是怎么能更新上model的参数，以及它怎么知道loss的值，并且根据loss来判断应该怎么更新的。其实oprimizer在声明时就和model的所有parameter关联上了，这样optimizer就能找到所有参数的位置，也能知道参数的梯度，这样才能更新参数。还有一个点就是loss函数是被设计成连续可导并且loss的计算值是始终大于等于0的，所以在实际更新时optimizer为了让loss值降低，需要做的就是沿着导数相反的方向去更新参数就能达到降低loss值的目的，比如导数为正数，说明增加参数会导致loss值增大，所以减小参数。如果导数为负数说明减小参数会导致loss值增加，所以增大参数。这样就把原本关于loss值大小和参数的关系转换到了loss导数和参数的关系。</p>
+<p>还有就是loss函数虽然一般都是二元一次函数，但是因为llm是在多层之间互相计算的，这导致最终在loss里组合出来的计算实际是一个高次多项式方程，这也是为什么loss函数的图像会呈现山脉的效果</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt"> 1
+</span><span class="lnt"> 2
+</span><span class="lnt"> 3
+</span><span class="lnt"> 4
+</span><span class="lnt"> 5
+</span><span class="lnt"> 6
+</span><span class="lnt"> 7
+</span><span class="lnt"> 8
+</span><span class="lnt"> 9
+</span><span class="lnt">10
+</span><span class="lnt">11
+</span><span class="lnt">12
+</span><span class="lnt">13
+</span><span class="lnt">14
+</span><span class="lnt">15
+</span><span class="lnt">16
+</span><span class="lnt">17
+</span><span class="lnt">18
+</span><span class="lnt">19
+</span><span class="lnt">20
+</span><span class="lnt">21
+</span><span class="lnt">22
+</span><span class="lnt">23
+</span><span class="lnt">24
+</span><span class="lnt">25
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="n">D</span> <span class="o">=</span> <span class="mi">3</span>
+</span></span><span class="line"><span class="cl"><span class="n">L</span> <span class="o">=</span> <span class="mi">4</span>
+</span></span><span class="line"><span class="cl"><span class="n">model</span> <span class="o">=</span> <span class="n">Cruncher</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="n">D</span><span class="p">,</span> <span class="n">num_layer</span><span class="o">=</span><span class="n">L</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="c1"># 将所有模型可以学习的参数传递给优化器</span>
+</span></span><span class="line"><span class="cl"><span class="n">optimizer</span> <span class="o">=</span> <span class="n">Adagrad</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">parameters</span><span class="p">(),</span> <span class="n">lr</span><span class="o">=</span><span class="mf">0.01</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="n">device</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">device</span><span class="p">(</span><span class="s2">&#34;cuda&#34;</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">()</span> <span class="k">else</span> <span class="s2">&#34;cpu&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="n">criterion</span> <span class="o">=</span> <span class="n">nn</span><span class="o">.</span><span class="n">MSELoss</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl"><span class="n">modelTrain</span> <span class="o">=</span> <span class="n">ModelTrain</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl"><span class="k">for</span> <span class="n">epoch</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">100</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">    <span class="n">x</span> <span class="o">=</span> <span class="n">modelTrain</span><span class="o">.</span><span class="n">get_my_batch</span><span class="p">(</span><span class="n">batch_size</span><span class="o">=</span><span class="mi">32</span><span class="p">,</span> <span class="n">sequence_length</span><span class="o">=</span><span class="n">D</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="c1"># 模拟真实数据</span>
+</span></span><span class="line"><span class="cl">    <span class="n">y_true</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="mi">32</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="c1"># 清空批次之间梯度</span>
+</span></span><span class="line"><span class="cl">    <span class="n">optimizer</span><span class="o">.</span><span class="n">zero_grad</span><span class="p">(</span><span class="n">set_to_none</span> <span class="o">=</span> <span class="kc">True</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="c1"># 向前传播，也就是计算</span>
+</span></span><span class="line"><span class="cl">    <span class="n">y_pred</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">x</span><span class="o">.</span><span class="n">float</span><span class="p">())</span>
+</span></span><span class="line"><span class="cl">    <span class="c1"># 计算loss，或者说获取loss</span>
+</span></span><span class="line"><span class="cl">    <span class="n">loss</span> <span class="o">=</span> <span class="n">criterion</span><span class="p">(</span><span class="n">y_pred</span><span class="p">,</span> <span class="n">y_true</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="c1"># 反向传播分发梯度到每个层的参数上</span>
+</span></span><span class="line"><span class="cl">    <span class="n">loss</span><span class="o">.</span><span class="n">backward</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">    <span class="c1"># 优化器更具梯度调整模型参数</span>
+</span></span><span class="line"><span class="cl">    <span class="n">optimizer</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="k">if</span> <span class="n">epoch</span> <span class="o">%</span> <span class="mi">10</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">        <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&#34;epoch is </span><span class="si">{</span><span class="n">epoch</span><span class="si">}</span><span class="s2">, loss: </span><span class="si">{</span><span class="n">loss</span><span class="o">.</span><span class="n">item</span><span class="p">()</span><span class="si">:</span><span class="s2">.4f</span><span class="si">}</span><span class="s2">&#34;</span><span class="p">)</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>可以把上面这些流程化整体串起来，再写一个代码</p>
+<div class="highlight"><div class="chroma">
+<table class="lntable"><tr><td class="lntd">
+<pre tabindex="0" class="chroma"><code><span class="lnt"> 1
+</span><span class="lnt"> 2
+</span><span class="lnt"> 3
+</span><span class="lnt"> 4
+</span><span class="lnt"> 5
+</span><span class="lnt"> 6
+</span><span class="lnt"> 7
+</span><span class="lnt"> 8
+</span><span class="lnt"> 9
+</span><span class="lnt">10
+</span><span class="lnt">11
+</span><span class="lnt">12
+</span><span class="lnt">13
+</span><span class="lnt">14
+</span><span class="lnt">15
+</span><span class="lnt">16
+</span><span class="lnt">17
+</span><span class="lnt">18
+</span><span class="lnt">19
+</span><span class="lnt">20
+</span><span class="lnt">21
+</span><span class="lnt">22
+</span><span class="lnt">23
+</span><span class="lnt">24
+</span><span class="lnt">25
+</span><span class="lnt">26
+</span><span class="lnt">27
+</span><span class="lnt">28
+</span><span class="lnt">29
+</span><span class="lnt">30
+</span><span class="lnt">31
+</span><span class="lnt">32
+</span><span class="lnt">33
+</span><span class="lnt">34
+</span><span class="lnt">35
+</span><span class="lnt">36
+</span><span class="lnt">37
+</span><span class="lnt">38
+</span><span class="lnt">39
+</span><span class="lnt">40
+</span><span class="lnt">41
+</span><span class="lnt">42
+</span><span class="lnt">43
+</span><span class="lnt">44
+</span><span class="lnt">45
+</span><span class="lnt">46
+</span><span class="lnt">47
+</span><span class="lnt">48
+</span><span class="lnt">49
+</span><span class="lnt">50
+</span><span class="lnt">51
+</span><span class="lnt">52
+</span><span class="lnt">53
+</span><span class="lnt">54
+</span><span class="lnt">55
+</span><span class="lnt">56
+</span><span class="lnt">57
+</span><span class="lnt">58
+</span><span class="lnt">59
+</span><span class="lnt">60
+</span></code></pre></td>
+<td class="lntd">
+<pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="kn">from</span> <span class="nn">llm.diy.chapter3.cruncher</span> <span class="kn">import</span> <span class="n">Cruncher</span>
+</span></span><span class="line"><span class="cl"><span class="kn">from</span> <span class="nn">torch.optim</span> <span class="kn">import</span> <span class="n">SGD</span>
+</span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">torch.nn.functional</span> <span class="k">as</span> <span class="nn">F</span>
+</span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">torch</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kn">from</span> <span class="nn">llm.diy.chapter3.model_train</span> <span class="kn">import</span> <span class="n">ModelTrain</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="k">class</span> <span class="nc">LoopTrain</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">    <span class="n">checkpoint_path</span> <span class="o">=</span> <span class="s2">&#34;../../../data/chapter3/model_checkpoint.pt&#34;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="k">def</span> <span class="nf">train</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">name</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">get_batch</span><span class="p">,</span> <span class="n">D</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">num_layers</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">B</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">num_train_steps</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">lr</span><span class="p">:</span> <span class="nb">float</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 当num_layers = 0时，就只有final一层，就是简单的线性回归</span>
+</span></span><span class="line"><span class="cl">        <span class="n">model</span> <span class="o">=</span> <span class="n">Cruncher</span><span class="p">(</span><span class="n">dim</span><span class="o">=</span><span class="n">D</span><span class="p">,</span> <span class="n">num_layer</span><span class="o">=</span><span class="n">num_layers</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 创建优化器</span>
+</span></span><span class="line"><span class="cl">        <span class="n">optimizer</span> <span class="o">=</span> <span class="n">SGD</span><span class="p">(</span><span class="n">model</span><span class="o">.</span><span class="n">parameters</span><span class="p">(),</span> <span class="n">lr</span><span class="o">=</span><span class="n">lr</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="k">if</span> <span class="s2">&#34;simple2&#34;</span> <span class="o">==</span> <span class="n">name</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">            <span class="n">load_checkpoint</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">checkpoint_path</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">model</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">load_checkpoint</span><span class="p">[</span><span class="s2">&#34;model&#34;</span><span class="p">])</span>
+</span></span><span class="line"><span class="cl">            <span class="n">optimizer</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">load_checkpoint</span><span class="p">[</span><span class="s2">&#34;optimizer&#34;</span><span class="p">])</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">        <span class="k">for</span> <span class="n">t</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">num_train_steps</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">            <span class="c1"># 加载输入数据，因为是传入了一个创建数据的方法，所以这里创建出来的数据每次都不一样</span>
+</span></span><span class="line"><span class="cl">            <span class="n">x</span><span class="p">,</span> <span class="n">y</span> <span class="o">=</span> <span class="n">get_batch</span><span class="p">(</span><span class="n">B</span><span class="o">=</span><span class="n">B</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="c1"># 向前传播并且计算损失</span>
+</span></span><span class="line"><span class="cl">            <span class="n">pre_y</span> <span class="o">=</span> <span class="n">model</span><span class="p">(</span><span class="n">x</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">loss</span> <span class="o">=</span> <span class="n">F</span><span class="o">.</span><span class="n">mse_loss</span><span class="p">(</span><span class="n">pre_y</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="c1"># 反向传播计算梯度</span>
+</span></span><span class="line"><span class="cl">            <span class="n">loss</span><span class="o">.</span><span class="n">backward</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">            <span class="c1"># 修改参数</span>
+</span></span><span class="line"><span class="cl">            <span class="n">optimizer</span><span class="o">.</span><span class="n">step</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">            <span class="c1"># 清空梯度</span>
+</span></span><span class="line"><span class="cl">            <span class="n">optimizer</span><span class="o">.</span><span class="n">zero_grad</span><span class="p">(</span><span class="n">set_to_none</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="k">if</span> <span class="n">t</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">                <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&#34;in train </span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2"> step </span><span class="si">{</span><span class="n">t</span><span class="si">}</span><span class="s2"> | loss </span><span class="si">{</span><span class="n">loss</span><span class="o">.</span><span class="n">item</span><span class="p">()</span><span class="si">:</span><span class="s2">.6f</span><span class="si">}</span><span class="s2">&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="k">if</span> <span class="n">t</span> <span class="o">%</span> <span class="n">num_train_steps</span> <span class="o">==</span> <span class="p">(</span><span class="n">num_train_steps</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">                <span class="n">checkpoint</span> <span class="o">=</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">                    <span class="s2">&#34;model&#34;</span><span class="p">:</span> <span class="n">model</span><span class="o">.</span><span class="n">state_dict</span><span class="p">(),</span>
+</span></span><span class="line"><span class="cl">                    <span class="s2">&#34;optimizer&#34;</span><span class="p">:</span> <span class="n">optimizer</span><span class="o">.</span><span class="n">state_dict</span><span class="p">(),</span>
+</span></span><span class="line"><span class="cl">                <span class="p">}</span>
+</span></span><span class="line"><span class="cl">                <span class="n">torch</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">checkpoint</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">checkpoint_path</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="k">def</span> <span class="nf">train_loop</span><span class="p">(</span><span class="bp">self</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 数据维度</span>
+</span></span><span class="line"><span class="cl">        <span class="n">D</span> <span class="o">=</span> <span class="mi">16</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># 直接随机一个向量作为训练的目标</span>
+</span></span><span class="line"><span class="cl">        <span class="n">true_w</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">D</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">        <span class="c1"># 输入数据生成方法，这样每次生成的都是不一样的输入数据，而且可以复用true_w, B就是定义的输入数据的条数</span>
+</span></span><span class="line"><span class="cl">        <span class="k">def</span> <span class="nf">get_batch</span><span class="p">(</span><span class="n">B</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">,</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]:</span>
+</span></span><span class="line"><span class="cl">            <span class="n">x</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randn</span><span class="p">(</span><span class="n">B</span><span class="p">,</span> <span class="n">D</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">true_y</span> <span class="o">=</span> <span class="n">x</span> <span class="o">@</span> <span class="n">true_w</span>
+</span></span><span class="line"><span class="cl">            <span class="k">return</span> <span class="n">x</span><span class="p">,</span> <span class="n">true_y</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">        <span class="bp">self</span><span class="o">.</span><span class="n">train</span><span class="p">(</span><span class="s2">&#34;simple1&#34;</span><span class="p">,</span> <span class="n">get_batch</span><span class="p">,</span> <span class="n">D</span><span class="o">=</span><span class="n">D</span><span class="p">,</span> <span class="n">num_layers</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">B</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">num_train_steps</span><span class="o">=</span><span class="mi">400</span><span class="p">,</span> <span class="n">lr</span><span class="o">=</span><span class="mf">0.01</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="bp">self</span><span class="o">.</span><span class="n">train</span><span class="p">(</span><span class="s2">&#34;simple2&#34;</span><span class="p">,</span> <span class="n">get_batch</span><span class="p">,</span> <span class="n">D</span><span class="o">=</span><span class="n">D</span><span class="p">,</span> <span class="n">num_layers</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">B</span><span class="o">=</span><span class="mi">4</span><span class="p">,</span> <span class="n">num_train_steps</span><span class="o">=</span><span class="mi">10</span><span class="p">,</span> <span class="n">lr</span><span class="o">=</span><span class="mf">0.1</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="n">loop_train</span> <span class="o">=</span> <span class="n">LoopTrain</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl"><span class="n">loop_train</span><span class="o">.</span><span class="n">train_loop</span><span class="p">()</span>
+</span></span></code></pre></td></tr></table>
+</div>
+</div><p>因为模型的训练往往是不连续的，必要时必须要能恢复模型的状态，必须要知道模型的参数，以及优化器的状态，所以检查点必须要能保存和序列化这两个参数。实际的训练时还可以采用混合精度训练，一般是向前传播的中间值使用BF16或者fb8，但是参数，梯度，优化器状态使用fp32,因为这些是训练的核心必须保证精度。可以使用pytorch的AMP库或者nvidia的库来实现这两个功能。</p>
+
+</section>
+
+
+    <footer class="article-footer">
+    
+
+    
+    <section class="article-copyright">
+        <svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler icon-tabler-copyright" width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" fill="none" stroke-linecap="round" stroke-linejoin="round">
+  <path stroke="none" d="M0 0h24v24H0z"/>
+  <circle cx="12" cy="12" r="9" />
+  <path d="M14.5 9a3.5 4 0 1 0 0 6" />
+</svg>
+
+
+
+        <span>Licensed under CC BY-NC-SA 4.0</span>
+    </section>
+    </footer>
+
+
+    
+</article>
+
+    
+
+    
+
+     
+    
+        
+    
+
+    <footer class="site-footer">
+    <section class="copyright">
+        &copy; 
+        
+            2025 - 
+        
+        2026 javashitu
+    </section>
+    
+    <section class="powerby">
+        使用 <a href="https://gohugo.io/" target="_blank" rel="noopener">Hugo</a> 构建 <br />
+        主题 <b><a href="https://github.com/CaiJimmy/hugo-theme-stack" target="_blank" rel="noopener" data-version="3.30.0">Stack</a></b> 由 <a href="https://jimmycai.com" target="_blank" rel="noopener">Jimmy</a> 设计
+    </section>
+</footer>
+
+
+    
+<div class="pswp" tabindex="-1" role="dialog" aria-hidden="true">
+
+    
+    <div class="pswp__bg"></div>
+
+    
+    <div class="pswp__scroll-wrap">
+
+        
+        <div class="pswp__container">
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+            <div class="pswp__item"></div>
+        </div>
+
+        
+        <div class="pswp__ui pswp__ui--hidden">
+
+            <div class="pswp__top-bar">
+
+                
+
+                <div class="pswp__counter"></div>
+
+                <button class="pswp__button pswp__button--close" title="Close (Esc)"></button>
+
+                <button class="pswp__button pswp__button--share" title="Share"></button>
+
+                <button class="pswp__button pswp__button--fs" title="Toggle fullscreen"></button>
+
+                <button class="pswp__button pswp__button--zoom" title="Zoom in/out"></button>
+
+                
+                
+                <div class="pswp__preloader">
+                    <div class="pswp__preloader__icn">
+                        <div class="pswp__preloader__cut">
+                            <div class="pswp__preloader__donut"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="pswp__share-modal pswp__share-modal--hidden pswp__single-tap">
+                <div class="pswp__share-tooltip"></div>
+            </div>
+
+            <button class="pswp__button pswp__button--arrow--left" title="Previous (arrow left)">
+            </button>
+
+            <button class="pswp__button pswp__button--arrow--right" title="Next (arrow right)">
+            </button>
+
+            <div class="pswp__caption">
+                <div class="pswp__caption__center"></div>
+            </div>
+
+        </div>
+
+    </div>
+
+</div><script 
+                src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.js"integrity="sha256-ePwmChbbvXbsO02lbM3HoHbSHTHFAeChekF1xKJdleo="crossorigin="anonymous"
+                defer
+                >
+            </script><script 
+                src="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe-ui-default.min.js"integrity="sha256-UKkzOn/w1mBxRmLLGrSeyB4e1xbrp4xylgAWb3M42pU="crossorigin="anonymous"
+                defer
+                >
+            </script><link 
+                rel="stylesheet" 
+                href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/default-skin/default-skin.min.css"crossorigin="anonymous"
+            ><link 
+                rel="stylesheet" 
+                href="https://cdn.jsdelivr.net/npm/photoswipe@4.1.3/dist/photoswipe.min.css"crossorigin="anonymous"
+            >
+
+            </main>
+        </div>
+        <script 
+                src="https://cdn.jsdelivr.net/npm/node-vibrant@3.1.6/dist/vibrant.min.js"integrity="sha256-awcR2jno4kI5X0zL8ex0vi2z&#43;KMkF24hUW8WePSA9HM="crossorigin="anonymous"
+                
+                >
+            </script><script type="text/javascript" src="/ts/main.4c637ef32fb19f6d91a76f6f1f78e08f50dc0096fc75afe065dfd9b68bccd6c0.js" defer></script>
+<script>
+    (function () {
+        const customFont = document.createElement('link');
+        customFont.href = "https://fonts.googleapis.com/css2?family=Lato:wght@300;400;700&display=swap";
+
+        customFont.type = "text/css";
+        customFont.rel = "stylesheet";
+
+        document.head.appendChild(customFont);
+    }());
+</script>
+
+    </body>
+</html>
